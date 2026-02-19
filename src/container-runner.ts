@@ -109,7 +109,7 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  const { HA_URL, HA_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN']);
+  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN']);
   const settings: Record<string, unknown> = {
     env: {
       // Enable agent swarms (subagent orchestration)
@@ -121,6 +121,8 @@ function buildVolumeMounts(
       // Enable Claude's memory feature (persists user preferences between sessions)
       // https://code.claude.com/docs/en/memory#manage-auto-memory
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+      ...(PAPERLESS_URL && { PAPERLESS_URL }),
+      ...(PAPERLESS_TOKEN && { PAPERLESS_TOKEN }),
     },
   };
   if (HA_URL && HA_TOKEN) {

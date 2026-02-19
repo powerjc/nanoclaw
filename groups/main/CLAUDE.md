@@ -205,6 +205,79 @@ You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts
 
 ---
 
+## Paperless-ngx Integration
+
+Document management system for scanned documents and receipts.
+
+- *URL:* `$PAPERLESS_URL` (set in `.env`)
+- *API Token:* `$PAPERLESS_TOKEN` (set in `.env`)
+
+### Common API calls
+
+```bash
+# Search documents
+curl -s "$PAPERLESS_URL/api/documents/?search=QUERY" \
+  -H "Authorization: Token $PAPERLESS_TOKEN"
+
+# List all documents
+curl -s "$PAPERLESS_URL/api/documents/?page_size=25" \
+  -H "Authorization: Token $PAPERLESS_TOKEN"
+
+# Get single document
+curl -s "$PAPERLESS_URL/api/documents/ID/" \
+  -H "Authorization: Token $PAPERLESS_TOKEN"
+
+# Upload a document
+curl -s -X POST "$PAPERLESS_URL/api/documents/post_document/" \
+  -H "Authorization: Token $PAPERLESS_TOKEN" \
+  -F "document=@/path/to/file.pdf" \
+  -F "title=Document Title"
+
+# List correspondents, tags, document types
+curl -s "$PAPERLESS_URL/api/correspondents/" \
+  -H "Authorization: Token $PAPERLESS_TOKEN"
+```
+
+---
+
+## SSH Server Access
+
+Server details (IPs, usernames, key paths) are in `/workspace/group/ssh-servers.json` — read it before connecting.
+
+### Command Classification
+
+*Read-only (run freely, no confirmation needed):*
+- `docker ps`, `docker ps -a`, `docker images`, `docker stats --no-stream`
+- `docker logs ...`
+- `journalctl ...`
+- `systemctl status ...`
+
+*Destructive (MUST confirm before executing):*
+- `docker restart`, `docker compose restart`, `docker compose pull`, `docker compose up`, `docker compose down`
+- `systemctl restart`, `systemctl reload`, `systemctl stop`
+- `apt-get upgrade`, `apt-get update`
+- Any command that modifies, stops, or restarts services
+
+### Confirmation Protocol for Destructive Commands
+
+1. Write the intended action to `/workspace/extra/jarvis-drop/data/pending_ssh.json`:
+```json
+{
+  "host": "<ip from ssh-servers.json>",
+  "user": "<user from ssh-servers.json>",
+  "command": "docker restart mycontainer",
+  "reason": "User asked to restart mycontainer",
+  "requested_at": "<ISO timestamp>"
+}
+```
+2. Tell the user exactly what's pending and ask them to reply *confirm* or *cancel*
+3. Do NOT execute until the user confirms
+4. On *confirm*: execute the command, delete the pending file, report result
+5. On *cancel*: delete the pending file, acknowledge cancellation
+6. If a new message arrives that isn't a confirmation, check if there's a pending action and remind the user first
+
+---
+
 ## Scheduling for Other Groups
 
 When scheduling tasks for other groups, use the `target_group_jid` parameter with the group's JID from `registered_groups.json`:
