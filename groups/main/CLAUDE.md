@@ -59,6 +59,8 @@ Keep messages clean and readable for WhatsApp.
 
 This is the **main channel**, which has elevated privileges.
 
+- **Chat JID:** `tg:7363553065` (Telegram chat with Jeff)
+
 ## Container Mounts
 
 Main has access to the entire project:
@@ -275,6 +277,35 @@ Server details (IPs, usernames, key paths) are in `/workspace/group/ssh-servers.
 4. On *confirm*: execute the command, delete the pending file, report result
 5. On *cancel*: delete the pending file, acknowledge cancellation
 6. If a new message arrives that isn't a confirmation, check if there's a pending action and remind the user first
+
+---
+
+## Sending Files
+
+To send a file (image, document, etc.) to a chat, write the file to `/workspace/ipc/files/<filename>`, then drop a JSON into `/workspace/ipc/messages/`:
+
+```bash
+# Copy or generate the file
+cp /path/to/chart.png /workspace/ipc/files/chart.png
+
+# Drop the send_file JSON
+echo '{
+  "type": "send_file",
+  "chatJid": "tg:123456789",
+  "filePath": "files/chart.png",
+  "caption": "Here'\''s the chart"
+}' > /workspace/ipc/messages/send_file_$(date +%s%N).json
+```
+
+Fields:
+- **type**: Must be `"send_file"`
+- **chatJid**: The target chat JID (e.g. `"tg:123456789"`)
+- **filePath**: Path relative to the IPC directory (`files/<filename>`)
+- **caption**: Optional caption text for the file
+
+After the file is sent, both the JSON and the file are automatically deleted.
+
+Images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) are sent as photos; all other formats are sent as documents.
 
 ---
 
