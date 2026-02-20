@@ -69,3 +69,27 @@ You have access to Gmail via MCP tools:
 - `mcp__gmail__download_attachment` — download an attachment
 
 Examples: "check my unread emails", "send an email to john@example.com", "find emails from last week about the invoice"
+
+## TV Shows & Movies (Sonarr / Radarr)
+
+Manage TV show and movie downloads via Sonarr and Radarr MCP tools (only available if configured).
+
+*Sonarr (TV):*
+- `mcp__sonarr_radarr__sonarr_search_series` — search for a show by name
+- `mcp__sonarr_radarr__sonarr_add_series` — add a show (use tvdbId from search)
+- `mcp__sonarr_radarr__sonarr_list_series` — list all monitored shows
+- `mcp__sonarr_radarr__sonarr_get_series` — detailed info for a show
+- `mcp__sonarr_radarr__sonarr_delete_series` — remove a show
+- `mcp__sonarr_radarr__sonarr_get_quality_profiles` — list quality profiles
+- `mcp__sonarr_radarr__sonarr_get_root_folders` — list storage paths
+
+*Radarr (Movies):*
+- `mcp__sonarr_radarr__radarr_search_movie` — search for a movie by name
+- `mcp__sonarr_radarr__radarr_add_movie` — add a movie (use tmdbId from search)
+- `mcp__sonarr_radarr__radarr_list_movies` — list all monitored movies
+- `mcp__sonarr_radarr__radarr_get_movie` — detailed info for a movie
+- `mcp__sonarr_radarr__radarr_delete_movie` — remove a movie
+- `mcp__sonarr_radarr__radarr_get_quality_profiles` — list quality profiles
+- `mcp__sonarr_radarr__radarr_get_root_folders` — list storage paths
+
+Typical workflow: search → confirm with user if multiple matches → add with default profile and folder.

@@ -109,7 +109,7 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN']);
+  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN, SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
   const settings: Record<string, unknown> = {
     env: {
       // Enable agent swarms (subagent orchestration)
@@ -123,6 +123,10 @@ function buildVolumeMounts(
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
       ...(PAPERLESS_URL && { PAPERLESS_URL }),
       ...(PAPERLESS_TOKEN && { PAPERLESS_TOKEN }),
+      ...(SONARR_URL && { SONARR_URL }),
+      ...(SONARR_API_KEY && { SONARR_API_KEY }),
+      ...(RADARR_URL && { RADARR_URL }),
+      ...(RADARR_API_KEY && { RADARR_API_KEY }),
     },
   };
   if (HA_URL && HA_TOKEN) {

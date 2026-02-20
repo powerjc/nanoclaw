@@ -432,7 +432,8 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__gmail__*'
+        'mcp__gmail__*',
+        'mcp__sonarr_radarr__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -449,6 +450,12 @@ async function runQuery(
           },
         },
         gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
+        ...(sdkEnv.SONARR_URL || sdkEnv.RADARR_URL ? {
+          sonarr_radarr: {
+            command: 'node',
+            args: [path.join(__dirname, 'sonarr-radarr-mcp.js')],
+          },
+        } : {}),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],

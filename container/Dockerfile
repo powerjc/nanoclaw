@@ -31,10 +31,13 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Set timezone to Central Time
+ENV TZ=America/Chicago
+
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
-# Create app directory
+# Build agent-runner
 WORKDIR /app
 
 # Copy package files first for better caching
