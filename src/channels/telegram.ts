@@ -200,14 +200,19 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-          );
+      const chunks =
+        text.length <= MAX_LENGTH
+          ? [text]
+          : Array.from({ length: Math.ceil(text.length / MAX_LENGTH) }, (_, i) =>
+              text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
+            );
+
+      for (const chunk of chunks) {
+        try {
+          await this.bot.api.sendMessage(numericId, chunk, { parse_mode: 'Markdown' });
+        } catch {
+          // Fall back to plain text if markdown parsing fails (e.g. unbalanced entities)
+          await this.bot.api.sendMessage(numericId, chunk);
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
