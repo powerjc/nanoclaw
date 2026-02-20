@@ -54,6 +54,8 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
@@ -433,7 +435,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
-        'mcp__sonarr_radarr__*'
+        'mcp__sonarr_radarr__*',
+        'mcp__ha_shopping_list__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -453,6 +456,10 @@ async function runQuery(
         sonarr_radarr: {
           command: 'node',
           args: [path.join(__dirname, 'sonarr-radarr-mcp.js')],
+        },
+        ha_shopping_list: {
+          command: 'node',
+          args: [path.join(__dirname, 'ha-shopping-list-mcp.js')],
         },
       },
       hooks: {
@@ -521,7 +528,6 @@ async function main(): Promise<void> {
     sdkEnv[key] = value;
   }
 
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;

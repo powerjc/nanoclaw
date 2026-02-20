@@ -109,7 +109,7 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN, SONARR_URL, SONARR_API_KEY, RADARR_URL, RADARR_API_KEY } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
+  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN']);
   const settings: Record<string, unknown> = {
     env: {
       // Enable agent swarms (subagent orchestration)
@@ -123,10 +123,6 @@ function buildVolumeMounts(
       CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
       ...(PAPERLESS_URL && { PAPERLESS_URL }),
       ...(PAPERLESS_TOKEN && { PAPERLESS_TOKEN }),
-      ...(SONARR_URL && { SONARR_URL }),
-      ...(SONARR_API_KEY && { SONARR_API_KEY }),
-      ...(RADARR_URL && { RADARR_URL }),
-      ...(RADARR_API_KEY && { RADARR_API_KEY }),
     },
   };
   if (HA_URL && HA_TOKEN) {
@@ -211,7 +207,10 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+  return readEnvFile([
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+  ]);
 }
 
 function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
@@ -225,6 +224,14 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
+  }
+
+  // Pass MCP config vars as Docker env vars so they propagate naturally through
+  // the process tree (container → Claude Code CLI → MCP server children).
+  // Auth tokens (OAUTH, ANTHROPIC_API_KEY) go via the stdin secrets pipeline instead.
+  const mcpEnv = readEnvFile(['HA_URL', 'HA_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
+  for (const [key, value] of Object.entries(mcpEnv)) {
+    args.push('-e', `${key}=${value}`);
   }
 
   // Docker: -v with :ro suffix for readonly
