@@ -450,12 +450,10 @@ async function runQuery(
           },
         },
         gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
-        ...(sdkEnv.SONARR_URL || sdkEnv.RADARR_URL ? {
-          sonarr_radarr: {
-            command: 'node',
-            args: [path.join(__dirname, 'sonarr-radarr-mcp.js')],
-          },
-        } : {}),
+        sonarr_radarr: {
+          command: 'node',
+          args: [path.join(__dirname, 'sonarr-radarr-mcp.js')],
+        },
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook()] }],
