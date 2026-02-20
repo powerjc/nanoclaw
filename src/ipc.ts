@@ -10,7 +10,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getAllTasks, getTaskById, updateTask } from './db.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -27,6 +27,7 @@ export interface IpcDeps {
     availableGroups: AvailableGroup[],
     registeredJids: Set<string>,
   ) => void;
+  refreshTasksSnapshot: (groupFolder: string, isMain: boolean) => void;
 }
 
 let ipcWatcherRunning = false;
@@ -299,6 +300,7 @@ export async function processTaskIpc(
           { taskId, sourceGroup, targetFolder, contextMode },
           'Task created via IPC',
         );
+        deps.refreshTasksSnapshot(targetFolder, targetFolder === sourceGroup ? isMain : true);
       }
       break;
 
@@ -311,6 +313,7 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task paused via IPC',
           );
+          deps.refreshTasksSnapshot(task.group_folder, isMain);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -329,6 +332,7 @@ export async function processTaskIpc(
             { taskId: data.taskId, sourceGroup },
             'Task resumed via IPC',
           );
+          deps.refreshTasksSnapshot(task.group_folder, isMain);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -342,11 +346,13 @@ export async function processTaskIpc(
       if (data.taskId) {
         const task = getTaskById(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
+          const cancelledGroupFolder = task.group_folder;
           deleteTask(data.taskId);
           logger.info(
             { taskId: data.taskId, sourceGroup },
             'Task cancelled via IPC',
           );
+          deps.refreshTasksSnapshot(cancelledGroupFolder, isMain);
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },

@@ -497,6 +497,18 @@ async function main(): Promise<void> {
       }
       return channel.sendFile(jid, filePath, caption);
     },
+    refreshTasksSnapshot: (groupFolder, isMain) => {
+      const tasks = getAllTasks();
+      writeTasksSnapshot(groupFolder, isMain, tasks.map((t) => ({
+        id: t.id,
+        groupFolder: t.group_folder,
+        prompt: t.prompt,
+        schedule_type: t.schedule_type,
+        schedule_value: t.schedule_value,
+        status: t.status,
+        next_run: t.next_run,
+      })));
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroupMetadata: (force) => whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
