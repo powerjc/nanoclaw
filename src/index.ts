@@ -41,6 +41,7 @@ import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { tryOllamaRoute } from './llm-router.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -169,6 +170,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+
+  // Try Ollama for simple/privacy queries — skip spawning a container
+  const ollamaResponse = await tryOllamaRoute(missedMessages, group.name);
+  if (ollamaResponse !== null) {
+    await channel.setTyping?.(chatJid, false);
+    await channel.sendMessage(chatJid, ollamaResponse);
+    return true;
+  }
+
   let hadError = false;
   let outputSentToUser = false;
 
