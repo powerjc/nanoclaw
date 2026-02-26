@@ -23,7 +23,7 @@ interface RoutingConfig {
   };
 }
 
-type RouteDecision = 'ollama-simple' | 'ollama-privacy' | 'claude';
+type RouteDecision = 'ollama-forced' | 'ollama-simple' | 'ollama-privacy' | 'claude';
 
 // Cached config — loaded once from disk
 let cachedConfig: RoutingConfig | null = null;
@@ -42,16 +42,26 @@ function loadConfig(): RoutingConfig | null {
   }
 }
 
+function lastUserMessage(messages: NewMessage[]): NewMessage {
+  const userMessages = messages.filter((m) => !m.is_from_me && !m.is_bot_message);
+  return userMessages.length > 0 ? userMessages[userMessages.length - 1] : messages[messages.length - 1];
+}
+
 /**
- * Extract the last user-visible text from the message list.
- * Strips the @BotName trigger prefix if present.
+ * Strip @mention and !local prefix, returning the bare query text.
  */
 function extractLastUserText(messages: NewMessage[]): string {
-  // Find last non-assistant message
-  const userMessages = messages.filter((m) => !m.is_from_me && !m.is_bot_message);
-  const last = userMessages.length > 0 ? userMessages[userMessages.length - 1] : messages[messages.length - 1];
-  // Strip @mention trigger prefix (e.g. "@Andy What is 2+2?" → "What is 2+2?")
-  return last.content.replace(/^@\S+\s*/u, '').trim();
+  return lastUserMessage(messages).content
+    .replace(/^@\S+\s*/u, '')   // strip @Andy trigger
+    .replace(/^!local\s*/i, '') // strip !local prefix
+    .trim();
+}
+
+/**
+ * Text after stripping only the @mention — used to detect !local before removing it.
+ */
+function mentionStripped(messages: NewMessage[]): string {
+  return lastUserMessage(messages).content.replace(/^@\S+\s*/u, '').trim();
 }
 
 function hasPrivacyKeyword(messages: NewMessage[], keywords: string[]): boolean {
@@ -62,12 +72,16 @@ function hasPrivacyKeyword(messages: NewMessage[], keywords: string[]): boolean 
   });
 }
 
+// Starters that don't require a '?' (imperative lookups)
+const COMMAND_STARTERS = new Set(['define', 'explain']);
+
 function isSimpleQuestion(text: string, maxWords: number, simpleStarters: string[]): boolean {
   const words = text.trim().split(/\s+/);
   if (words.length > maxWords) return false;
-  if (!text.includes('?')) return false;
   const firstWord = words[0].toLowerCase().replace(/[^a-z]/g, '');
-  return simpleStarters.includes(firstWord);
+  if (!simpleStarters.includes(firstWord)) return false;
+  // Command-style starters (define, explain) don't need a '?'
+  return COMMAND_STARTERS.has(firstWord) || text.includes('?');
 }
 
 export function classifyMessages(messages: NewMessage[]): RouteDecision {
@@ -75,6 +89,11 @@ export function classifyMessages(messages: NewMessage[]): RouteDecision {
   if (!cfg || !cfg.enabled) return 'claude';
 
   const { routing } = cfg;
+
+  // Priority 0: explicit !local signal — user-requested local execution
+  if (/^!local\b/i.test(mentionStripped(messages))) {
+    return 'ollama-forced';
+  }
 
   // Priority 1: privacy keywords → keep local
   if (hasPrivacyKeyword(messages, routing.privacyKeywords)) {
@@ -113,6 +132,7 @@ export async function tryOllamaRoute(
   const userText = extractLastUserText(messages);
   const model =
     decision === 'ollama-simple' ? cfg.ollama.models.simple : cfg.ollama.models.general;
+  // ollama-forced and ollama-privacy both use the general model
 
   logger.info(
     { group: groupName, decision, model, query: userText.slice(0, 120) },

@@ -364,7 +364,14 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // Try Ollama before piping to container or starting a new one
+          const ollamaResponse = await tryOllamaRoute(messagesToSend, group.name);
+          if (ollamaResponse !== null) {
+            lastAgentTimestamp[chatJid] =
+              messagesToSend[messagesToSend.length - 1].timestamp;
+            saveState();
+            await channel.sendMessage(chatJid, ollamaResponse);
+          } else if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
