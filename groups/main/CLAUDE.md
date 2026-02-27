@@ -242,6 +242,55 @@ curl -s "$PAPERLESS_URL/api/correspondents/" \
 
 ---
 
+## Jellyfin Integration
+
+Query the Jellyfin media server for movies and TV shows using helper scripts.
+
+- *URL:* `$JELLYFIN_URL` (set in `.env`)
+- *API Key:* `$JELLYFIN_API_KEY` (set in `.env`)
+- *User ID:* `$JELLYFIN_USER_ID` (optional, set in `.env`)
+
+### Available Functions
+
+Import and use `/workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py`:
+
+```python
+from jellyfin_helpers import search_content, get_latest_episodes, get_latest_content
+
+# Search for a movie or show
+result = search_content("Inception", content_type="Movie")
+# Returns: {"found": bool, "count": int, "results": [{"name", "type", "year", "id", "hasFile"}]}
+
+# Check for new episodes (optionally filter by show name)
+result = get_latest_episodes(show_name="The Office", limit=10)
+# Returns: {"count": int, "episodes": [{"seriesName", "seasonNumber", "episodeNumber", "name", "dateAdded", "id"}]}
+
+# Get recently added content
+result = get_latest_content(content_type="Movie", limit=10)
+# Returns: {"count": int, "items": [{"name", "type", "year", "dateAdded", "id"}]}
+```
+
+### CLI Usage
+
+```bash
+# Search for content
+python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py search "Inception" Movie
+
+# Get recent episodes
+python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py episodes "The Office" 5
+
+# Get latest added content
+python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py latest Movie 10
+```
+
+### Common Use Cases
+
+- "Do we have [movie name]?" → `search_content(query, "Movie")`
+- "Is there a new episode of [show]?" → `get_latest_episodes(show_name)`
+- "What's new in Jellyfin?" → `get_latest_content()`
+
+---
+
 ## SSH Server Access
 
 Server details (IPs, usernames, key paths) are in `/workspace/group/ssh-servers.json` — read it before connecting.
@@ -315,3 +364,6 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 - `schedule_task(prompt: "...", schedule_type: "cron", schedule_value: "0 9 * * 1", target_group_jid: "120363336345536173@g.us")`
 
 The task will run in that group's context with access to their files and memory.
+
+@./soul.md
+@./self_improvement.md

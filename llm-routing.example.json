@@ -6,7 +6,8 @@
     "models": {
       "simple": "llama3.2:3b",
       "general": "qwen3:8b",
-      "reasoning": "deepseek-r1:8b"
+      "reasoning": "deepseek-r1:8b",
+      "forced": "deepseek-r1:8b"
     }
   },
   "routing": {

@@ -20,6 +20,29 @@ import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
+/**
+ * Expand @-imports in a CLAUDE.md file recursively.
+ * Lines matching ^@(.+)$ are replaced with the compiled content of the referenced file.
+ * Circular imports are detected and skipped with a warning comment.
+ */
+function compileClaudeMd(filePath: string, visited = new Set<string>()): string {
+  if (!fs.existsSync(filePath)) return '';
+  const resolved = path.resolve(filePath);
+  if (visited.has(resolved)) return `<!-- @import circular: ${filePath} -->`;
+  visited.add(resolved);
+  const content = fs.readFileSync(resolved, 'utf-8');
+  const dir = path.dirname(resolved);
+  return content.split('\n').map(line => {
+    const match = line.match(/^@(.+)$/);
+    if (match) {
+      const importPath = path.resolve(dir, match[1].trim());
+      if (!fs.existsSync(importPath)) return `<!-- @import not found: ${match[1].trim()} -->`;
+      return compileClaudeMd(importPath, visited);
+    }
+    return line;
+  }).join('\n');
+}
+
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -260,6 +283,26 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   const mounts = buildVolumeMounts(group, input.isMain);
+
+  // Shadow-mount a compiled group CLAUDE.md if it contains @-imports.
+  // Docker file-level mounts override the directory-level mount at the same path.
+  let compiledClaudeMdTmp: string | undefined;
+  const groupClaudeMdPath = path.join(GROUPS_DIR, group.folder, 'CLAUDE.md');
+  if (fs.existsSync(groupClaudeMdPath)) {
+    const raw = fs.readFileSync(groupClaudeMdPath, 'utf-8');
+    const compiled = compileClaudeMd(groupClaudeMdPath);
+    if (compiled !== raw) {
+      compiledClaudeMdTmp = path.join(os.tmpdir(), `nanoclaw-compiled-${group.folder}-${Date.now()}.md`);
+      fs.writeFileSync(compiledClaudeMdTmp, compiled, 'utf-8');
+      mounts.push({
+        hostPath: compiledClaudeMdTmp,
+        containerPath: '/workspace/group/CLAUDE.md',
+        readonly: true,
+      });
+      logger.debug({ group: group.name, tmpFile: compiledClaudeMdTmp }, 'Shadowing CLAUDE.md with compiled version');
+    }
+  }
+
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
@@ -289,6 +332,13 @@ export async function runContainerAgent(
 
   const logsDir = path.join(GROUPS_DIR, group.folder, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
+
+  const cleanupTmp = () => {
+    if (compiledClaudeMdTmp) {
+      try { fs.unlinkSync(compiledClaudeMdTmp); } catch { /* ignore */ }
+      compiledClaudeMdTmp = undefined;
+    }
+  };
 
   return new Promise((resolve) => {
     const container = spawn('docker', containerArgs, {
@@ -416,6 +466,7 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
+      cleanupTmp();
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -607,6 +658,7 @@ export async function runContainerAgent(
 
     container.on('error', (err) => {
       clearTimeout(timeout);
+      cleanupTmp();
       logger.error({ group: group.name, containerName, error: err }, 'Container spawn error');
       resolve({
         status: 'error',
