@@ -4,7 +4,6 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import {
@@ -27,29 +26,6 @@ import {
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
-/**
- * Expand @-imports in a CLAUDE.md file recursively.
- * Lines matching ^@(.+)$ are replaced with the compiled content of the referenced file.
- * Circular imports are detected and skipped with a warning comment.
- */
-function compileClaudeMd(filePath: string, visited = new Set<string>()): string {
-  if (!fs.existsSync(filePath)) return '';
-  const resolved = path.resolve(filePath);
-  if (visited.has(resolved)) return `<!-- @import circular: ${filePath} -->`;
-  visited.add(resolved);
-  const content = fs.readFileSync(resolved, 'utf-8');
-  const dir = path.dirname(resolved);
-  return content.split('\n').map(line => {
-    const match = line.match(/^@(.+)$/);
-    if (match) {
-      const importPath = path.resolve(dir, match[1].trim());
-      if (!fs.existsSync(importPath)) return `<!-- @import not found: ${match[1].trim()} -->`;
-      return compileClaudeMd(importPath, visited);
-    }
-    return line;
-  }).join('\n');
-}
-
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
@@ -63,8 +39,6 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
-  imageData?: string;       // base64 JPEG (optional)
-  imageMimeType?: string;
 }
 
 export interface ContainerOutput {
@@ -99,17 +73,6 @@ function buildVolumeMounts(
       containerPath: '/workspace/project',
       readonly: true,
     });
-
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Secrets are passed via stdin instead (see readSecrets()).
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -147,32 +110,28 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN']);
-  const settings: Record<string, unknown> = {
-    env: {
-      // Enable agent swarms (subagent orchestration)
-      // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-      // Load CLAUDE.md from additional mounted directories
-      // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-      CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-      // Enable Claude's memory feature (persists user preferences between sessions)
-      // https://code.claude.com/docs/en/memory#manage-auto-memory
-      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-      ...(PAPERLESS_URL && { PAPERLESS_URL }),
-      ...(PAPERLESS_TOKEN && { PAPERLESS_TOKEN }),
-    },
-  };
-  if (HA_URL && HA_TOKEN) {
-    settings.mcpServers = {
-      'home-assistant': {
-        type: 'sse',
-        url: `${HA_URL.replace(/\/$/, '')}/mcp_server/sse`,
-        headers: { Authorization: `Bearer ${HA_TOKEN}` },
-      },
-    };
+  if (!fs.existsSync(settingsFile)) {
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify(
+        {
+          env: {
+            // Enable agent swarms (subagent orchestration)
+            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+            // Load CLAUDE.md from additional mounted directories
+            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+            // Enable Claude's memory feature (persists user preferences between sessions)
+            // https://code.claude.com/docs/en/memory#manage-auto-memory
+            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+          },
+        },
+        null,
+        2,
+      ) + '\n',
+    );
   }
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
 
   // Sync skills from container/skills/ into each group's .claude/skills/
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
@@ -190,17 +149,6 @@ function buildVolumeMounts(
     containerPath: '/home/node/.claude',
     readonly: false,
   });
-
-  // Gmail credentials (read-write so MCP can refresh OAuth tokens)
-  const homeDir = process.env.HOME || os.homedir();
-  const gmailDir = path.join(homeDir, '.gmail-mcp');
-  if (fs.existsSync(gmailDir)) {
-    mounts.push({
-      hostPath: gmailDir,
-      containerPath: '/home/node/.gmail-mcp',
-      readonly: false,
-    });
-  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
@@ -256,15 +204,13 @@ function buildVolumeMounts(
  * Secrets are never written to disk or mounted as files.
  */
 function readSecrets(): Record<string, string> {
-  return readEnvFile([
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-  ]);
+  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
 }
 
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  isMain: boolean,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -277,18 +223,16 @@ function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
-
-  // Pass MCP config vars as Docker env vars so they propagate naturally through
-  // the process tree (container → Claude Code CLI → MCP server children).
-  // Auth tokens (OAUTH, ANTHROPIC_API_KEY) go via the stdin secrets pipeline instead.
-  const mcpEnv = readEnvFile(['HA_URL', 'HA_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
-  for (const [key, value] of Object.entries(mcpEnv)) {
-    args.push('-e', `${key}=${value}`);
-  }
-
 
   for (const mount of mounts) {
     if (mount.readonly) {
@@ -315,29 +259,9 @@ export async function runContainerAgent(
   fs.mkdirSync(groupDir, { recursive: true });
 
   const mounts = buildVolumeMounts(group, input.isMain);
-
-  // Shadow-mount a compiled group CLAUDE.md if it contains @-imports.
-  // Docker file-level mounts override the directory-level mount at the same path.
-  let compiledClaudeMdTmp: string | undefined;
-  const groupClaudeMdPath = path.join(GROUPS_DIR, group.folder, 'CLAUDE.md');
-  if (fs.existsSync(groupClaudeMdPath)) {
-    const raw = fs.readFileSync(groupClaudeMdPath, 'utf-8');
-    const compiled = compileClaudeMd(groupClaudeMdPath);
-    if (compiled !== raw) {
-      compiledClaudeMdTmp = path.join(os.tmpdir(), `nanoclaw-compiled-${group.folder}-${Date.now()}.md`);
-      fs.writeFileSync(compiledClaudeMdTmp, compiled, 'utf-8');
-      mounts.push({
-        hostPath: compiledClaudeMdTmp,
-        containerPath: '/workspace/group/CLAUDE.md',
-        readonly: true,
-      });
-      logger.debug({ group: group.name, tmpFile: compiledClaudeMdTmp }, 'Shadowing CLAUDE.md with compiled version');
-    }
-  }
-
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
 
   logger.debug(
     {
@@ -364,13 +288,6 @@ export async function runContainerAgent(
 
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
-
-  const cleanupTmp = () => {
-    if (compiledClaudeMdTmp) {
-      try { fs.unlinkSync(compiledClaudeMdTmp); } catch { /* ignore */ }
-      compiledClaudeMdTmp = undefined;
-    }
-  };
 
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
@@ -504,7 +421,6 @@ export async function runContainerAgent(
 
     container.on('close', (code) => {
       clearTimeout(timeout);
-      cleanupTmp();
       const duration = Date.now() - startTime;
 
       if (timedOut) {
@@ -700,7 +616,6 @@ export async function runContainerAgent(
 
     container.on('error', (err) => {
       clearTimeout(timeout);
-      cleanupTmp();
       logger.error(
         { group: group.name, containerName, error: err },
         'Container spawn error',
