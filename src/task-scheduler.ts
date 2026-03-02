@@ -4,6 +4,7 @@ import fs from 'fs';
 
 import {
   ASSISTANT_NAME,
+  CONTAINER_TIMEOUT,
   MAIN_GROUP_FOLDER,
   SCHEDULER_POLL_INTERVAL,
   TIMEZONE,
@@ -18,6 +19,7 @@ import {
   getDueTasks,
   getTaskById,
   logTaskRun,
+  markTaskRunning,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -50,6 +52,7 @@ async function runTask(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // Stop retry churn for malformed legacy rows.
+    runningTaskStartTimes.delete(task.id);
     updateTask(task.id, { status: 'paused' });
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder, error },
@@ -78,6 +81,7 @@ async function runTask(
   );
 
   if (!group) {
+    runningTaskStartTimes.delete(task.id);
     logger.error(
       { taskId: task.id, groupFolder: task.group_folder },
       'Group not found for task',
@@ -210,7 +214,11 @@ async function runTask(
       ? result.slice(0, 200)
       : 'Completed';
   updateTaskAfterRun(task.id, nextRun, resultSummary);
+  runningTaskStartTimes.delete(task.id);
 }
+
+const runningTaskStartTimes = new Map<string, number>(); // taskId → Date.now()
+const STUCK_TASK_THRESHOLD_MS = 2 * CONTAINER_TIMEOUT;
 
 let schedulerRunning = false;
 
@@ -224,18 +232,29 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
+      // Reset any tasks that have been running longer than the threshold
+      const now = Date.now();
+      for (const [taskId, startTime] of runningTaskStartTimes) {
+        if (now - startTime > STUCK_TASK_THRESHOLD_MS) {
+          logger.warn({ taskId }, 'Resetting stuck running task to active');
+          updateTask(taskId, { status: 'active' });
+          runningTaskStartTimes.delete(taskId);
+        }
+      }
+
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');
       }
 
       for (const task of dueTasks) {
-        // Re-check task status in case it was paused/cancelled
         const currentTask = getTaskById(task.id);
-        if (!currentTask || currentTask.status !== 'active') {
-          continue;
-        }
+        if (!currentTask || currentTask.status !== 'active') continue;
 
+        const claimed = markTaskRunning(currentTask.id);
+        if (!claimed) continue; // Another poll already claimed it
+
+        runningTaskStartTimes.set(currentTask.id, Date.now());
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),
         );
@@ -253,4 +272,5 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 /** @internal - for tests only. */
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
+  runningTaskStartTimes.clear();
 }

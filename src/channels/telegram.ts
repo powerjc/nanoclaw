@@ -1,8 +1,11 @@
+import { promises as fsp } from 'fs';
 import path from 'path';
 
 import { Bot, InputFile } from 'grammy';
+import sharp from 'sharp';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import {
   Channel,
@@ -149,7 +152,48 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+      try {
+        const largest = ctx.message.photo[ctx.message.photo.length - 1];
+        const file = await ctx.api.getFile(largest.file_id);
+        const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+        const resized = await sharp(buf)
+          .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        const timestamp = new Date(ctx.message.date * 1000).toISOString();
+        const filename = `${timestamp.replace(/[:.]/g, '-')}-${largest.file_unique_id}.jpg`;
+        const imagesDir = path.join(resolveGroupFolderPath(group.folder), 'images');
+        await fsp.mkdir(imagesDir, { recursive: true });
+        await fsp.writeFile(path.join(imagesDir, filename), resized);
+        const senderName =
+          ctx.from?.first_name ||
+          ctx.from?.username ||
+          ctx.from?.id?.toString() ||
+          'Unknown';
+        this.opts.onChatMetadata(chatJid, timestamp);
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: ctx.message.caption || 'What do you see in this image?',
+          timestamp,
+          is_from_me: false,
+          image_data: resized.toString('base64'),
+          image_path: `images/${filename}`,
+          image_mime_type: 'image/jpeg',
+        });
+        logger.info({ chatJid, filename, bytes: resized.length }, 'Telegram photo processed');
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to process Telegram photo');
+        storeNonText(ctx, '[Photo - processing failed]');
+      }
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) =>
       storeNonText(ctx, '[Voice message]'),

@@ -51,6 +51,8 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  imageData?: string;
+  imageMimeType?: string;
 }
 
 interface ContainerOutput {
@@ -73,7 +75,7 @@ interface SessionsIndex {
 
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | unknown[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -97,6 +99,17 @@ class MessageStream {
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      session_id: '',
+    });
+    this.waiting?.();
+  }
+
+  pushContent(content: unknown[]): void {
+    this.queue.push({
+      type: 'user',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      message: { role: 'user', content } as any,
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -380,7 +393,7 @@ function waitForIpcMessage(): Promise<string | null> {
  * Also pipes IPC messages into the stream during the query.
  */
 async function runQuery(
-  prompt: string,
+  prompt: string | unknown[],
   sessionId: string | undefined,
   mcpServerPath: string,
   containerInput: ContainerInput,
@@ -388,7 +401,11 @@ async function runQuery(
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
-  stream.push(prompt);
+  if (Array.isArray(prompt)) {
+    stream.pushContent(prompt);
+  } else {
+    stream.push(prompt);
+  }
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
@@ -571,13 +588,30 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // Build multimodal content if image data is present
+  let initialContent: string | unknown[] = prompt;
+  if (containerInput.imageData) {
+    initialContent = [
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: containerInput.imageMimeType || 'image/jpeg',
+          data: containerInput.imageData,
+        },
+      },
+      { type: 'text', text: prompt },
+    ];
+    log('Multimodal content constructed with image');
+  }
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(initialContent, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
@@ -607,6 +641,7 @@ async function main(): Promise<void> {
 
       log(`Got new message (${nextMessage.length} chars), starting new query`);
       prompt = nextMessage;
+      initialContent = prompt; // subsequent turns are text-only
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

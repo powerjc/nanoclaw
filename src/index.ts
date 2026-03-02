@@ -31,6 +31,7 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  resetRunningTasks,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -54,6 +55,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+
+const pendingImageData = new Map<string, { base64: string; mimeType: string }>();
 
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
@@ -165,6 +168,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const prompt = formatMessages(missedMessages);
 
+  // Capture any pending image data for messages in this batch
+  const imgMsg = missedMessages.find((m) => pendingImageData.has(m.id));
+  const imageData = imgMsg ? pendingImageData.get(imgMsg.id) : undefined;
+  if (imgMsg && imageData) pendingImageData.delete(imgMsg.id);
+
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
@@ -173,7 +181,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: missedMessages.length, hasImage: !!imageData },
     'Processing messages',
   );
 
@@ -194,7 +202,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
 
   // Try Ollama for simple/privacy queries — skip spawning a container
-  const ollamaResponse = await tryOllamaRoute(missedMessages, group.name);
+  // Skip Ollama entirely if the batch contains an image (Ollama has no vision)
+  const ollamaResponse = imageData ? null : await tryOllamaRoute(missedMessages, group.name);
   if (ollamaResponse !== null) {
     await channel.setTyping?.(chatJid, false);
     await channel.sendMessage(chatJid, ollamaResponse);
@@ -229,7 +238,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, imageData);
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -262,6 +271,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  imageData?: { base64: string; mimeType: string },
 ): Promise<'success' | 'error'> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
@@ -312,6 +322,8 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        imageData: imageData?.base64,
+        imageMimeType: imageData?.mimeType,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -409,7 +421,9 @@ async function startMessageLoop(): Promise<void> {
           const formatted = formatMessages(messagesToSend);
 
           // Try Ollama before piping to container or starting a new one
-          const ollamaResponse = await tryOllamaRoute(messagesToSend, group.name);
+          // Skip if any message in the batch has pending image data (Ollama has no vision)
+          const hasImage = messagesToSend.some((m) => pendingImageData.has(m.id));
+          const ollamaResponse = hasImage ? null : await tryOllamaRoute(messagesToSend, group.name);
           if (ollamaResponse !== null) {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
@@ -469,6 +483,13 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
+  const resetCount = resetRunningTasks();
+  if (resetCount > 0) {
+    logger.warn(
+      { count: resetCount },
+      'Reset running tasks interrupted by previous shutdown',
+    );
+  }
   loadState();
 
   // Graceful shutdown handlers
@@ -483,7 +504,15 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (_chatJid: string, msg: NewMessage) => storeMessage(msg),
+    onMessage: (_chatJid: string, msg: NewMessage) => {
+      if (msg.image_data) {
+        pendingImageData.set(msg.id, {
+          base64: msg.image_data,
+          mimeType: msg.image_mime_type ?? 'image/jpeg',
+        });
+      }
+      storeMessage(msg);
+    },
     onChatMetadata: (
       chatJid: string,
       timestamp: string,

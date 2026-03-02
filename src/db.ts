@@ -442,6 +442,24 @@ export function getDueTasks(): ScheduledTask[] {
     .all(now) as ScheduledTask[];
 }
 
+export function markTaskRunning(id: string): boolean {
+  const result = db
+    .prepare(
+      "UPDATE scheduled_tasks SET status = 'running' WHERE id = ? AND status = 'active'",
+    )
+    .run(id);
+  return result.changes > 0;
+}
+
+export function resetRunningTasks(): number {
+  const result = db
+    .prepare(
+      "UPDATE scheduled_tasks SET status = 'active' WHERE status = 'running'",
+    )
+    .run();
+  return result.changes;
+}
+
 export function updateTaskAfterRun(
   id: string,
   nextRun: string | null,
@@ -451,7 +469,7 @@ export function updateTaskAfterRun(
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE 'active' END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);

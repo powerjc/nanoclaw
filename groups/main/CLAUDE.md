@@ -207,157 +207,6 @@ You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts
 
 ---
 
-## Paperless-ngx Integration
-
-Document management system for scanned documents and receipts.
-
-- *URL:* `$PAPERLESS_URL` (set in `.env`)
-- *API Token:* `$PAPERLESS_TOKEN` (set in `.env`)
-
-### Common API calls
-
-```bash
-# Search documents
-curl -s "$PAPERLESS_URL/api/documents/?search=QUERY" \
-  -H "Authorization: Token $PAPERLESS_TOKEN"
-
-# List all documents
-curl -s "$PAPERLESS_URL/api/documents/?page_size=25" \
-  -H "Authorization: Token $PAPERLESS_TOKEN"
-
-# Get single document
-curl -s "$PAPERLESS_URL/api/documents/ID/" \
-  -H "Authorization: Token $PAPERLESS_TOKEN"
-
-# Upload a document
-curl -s -X POST "$PAPERLESS_URL/api/documents/post_document/" \
-  -H "Authorization: Token $PAPERLESS_TOKEN" \
-  -F "document=@/path/to/file.pdf" \
-  -F "title=Document Title"
-
-# List correspondents, tags, document types
-curl -s "$PAPERLESS_URL/api/correspondents/" \
-  -H "Authorization: Token $PAPERLESS_TOKEN"
-```
-
----
-
-## Jellyfin Integration
-
-Query the Jellyfin media server for movies and TV shows using helper scripts.
-
-- *URL:* `$JELLYFIN_URL` (set in `.env`)
-- *API Key:* `$JELLYFIN_API_KEY` (set in `.env`)
-- *User ID:* `$JELLYFIN_USER_ID` (optional, set in `.env`)
-
-### Available Functions
-
-Import and use `/workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py`:
-
-```python
-from jellyfin_helpers import search_content, get_latest_episodes, get_latest_content
-
-# Search for a movie or show
-result = search_content("Inception", content_type="Movie")
-# Returns: {"found": bool, "count": int, "results": [{"name", "type", "year", "id", "hasFile"}]}
-
-# Check for new episodes (optionally filter by show name)
-result = get_latest_episodes(show_name="The Office", limit=10)
-# Returns: {"count": int, "episodes": [{"seriesName", "seasonNumber", "episodeNumber", "name", "dateAdded", "id"}]}
-
-# Get recently added content
-result = get_latest_content(content_type="Movie", limit=10)
-# Returns: {"count": int, "items": [{"name", "type", "year", "dateAdded", "id"}]}
-```
-
-### CLI Usage
-
-```bash
-# Search for content
-python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py search "Inception" Movie
-
-# Get recent episodes
-python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py episodes "The Office" 5
-
-# Get latest added content
-python3 /workspace/extra/jarvis-drop/scripts/jellyfin_helpers.py latest Movie 10
-```
-
-### Common Use Cases
-
-- "Do we have [movie name]?" → `search_content(query, "Movie")`
-- "Is there a new episode of [show]?" → `get_latest_episodes(show_name)`
-- "What's new in Jellyfin?" → `get_latest_content()`
-
----
-
-## SSH Server Access
-
-Server details (IPs, usernames, key paths) are in `/workspace/group/ssh-servers.json` — read it before connecting.
-
-### Command Classification
-
-*Read-only (run freely, no confirmation needed):*
-- `docker ps`, `docker ps -a`, `docker images`, `docker stats --no-stream`
-- `docker logs ...`
-- `journalctl ...`
-- `systemctl status ...`
-
-*Destructive (MUST confirm before executing):*
-- `docker restart`, `docker compose restart`, `docker compose pull`, `docker compose up`, `docker compose down`
-- `systemctl restart`, `systemctl reload`, `systemctl stop`
-- `apt-get upgrade`, `apt-get update`
-- Any command that modifies, stops, or restarts services
-
-### Confirmation Protocol for Destructive Commands
-
-1. Write the intended action to `/workspace/extra/jarvis-drop/data/pending_ssh.json`:
-```json
-{
-  "host": "<ip from ssh-servers.json>",
-  "user": "<user from ssh-servers.json>",
-  "command": "docker restart mycontainer",
-  "reason": "User asked to restart mycontainer",
-  "requested_at": "<ISO timestamp>"
-}
-```
-2. Tell the user exactly what's pending and ask them to reply *confirm* or *cancel*
-3. Do NOT execute until the user confirms
-4. On *confirm*: execute the command, delete the pending file, report result
-5. On *cancel*: delete the pending file, acknowledge cancellation
-6. If a new message arrives that isn't a confirmation, check if there's a pending action and remind the user first
-
----
-
-## Sending Files
-
-To send a file (image, document, etc.) to a chat, write the file to `/workspace/ipc/files/<filename>`, then drop a JSON into `/workspace/ipc/messages/`:
-
-```bash
-# Copy or generate the file
-cp /path/to/chart.png /workspace/ipc/files/chart.png
-
-# Drop the send_file JSON
-echo '{
-  "type": "send_file",
-  "chatJid": "tg:123456789",
-  "filePath": "files/chart.png",
-  "caption": "Here'\''s the chart"
-}' > /workspace/ipc/messages/send_file_$(date +%s%N).json
-```
-
-Fields:
-- **type**: Must be `"send_file"`
-- **chatJid**: The target chat JID (e.g. `"tg:123456789"`)
-- **filePath**: Path relative to the IPC directory (`files/<filename>`)
-- **caption**: Optional caption text for the file
-
-After the file is sent, both the JSON and the file are automatically deleted.
-
-Images (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`) are sent as photos; all other formats are sent as documents.
-
----
-
 ## Scheduling for Other Groups
 
 When scheduling tasks for other groups, use the `target_group_jid` parameter with the group's JID from `registered_groups.json`:
@@ -365,5 +214,18 @@ When scheduling tasks for other groups, use the `target_group_jid` parameter wit
 
 The task will run in that group's context with access to their files and memory.
 
+---
+
+## Personality
+
 @./soul.md
 @./self_improvement.md
+
+---
+
+## Tool Integrations
+
+@./integrations/paperless.md
+@./integrations/jellyfin.md
+@./integrations/ssh.md
+@./integrations/file-sending.md
