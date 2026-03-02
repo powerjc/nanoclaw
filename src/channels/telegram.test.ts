@@ -532,31 +532,33 @@ describe('TelegramChannel', () => {
   // --- Non-text messages ---
 
   describe('non-text messages', () => {
-    it('stores photo with placeholder', async () => {
+    it('stores photo with placeholder on processing failure', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
+      // ctx.message.photo is undefined in test env → triggers the error fallback
       const ctx = createMediaCtx({});
       await triggerMediaMessage('message:photo', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Photo]' }),
+        expect.objectContaining({ content: '[Photo - processing failed]' }),
       );
     });
 
-    it('stores photo with caption', async () => {
+    it('stores photo with caption on processing failure', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
+      // ctx.message.photo is undefined in test env → triggers the error fallback
       const ctx = createMediaCtx({ caption: 'Look at this' });
       await triggerMediaMessage('message:photo', ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Photo] Look at this' }),
+        expect.objectContaining({ content: '[Photo - processing failed] Look at this' }),
       );
     });
 
