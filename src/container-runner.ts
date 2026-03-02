@@ -16,7 +16,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { readEnvFile } from './env.js';
+import { readAllEnvVars, readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -283,11 +283,24 @@ function buildContainerArgs(
     args.push('-e', 'HOME=/home/node');
   }
 
-  // Pass MCP config vars as Docker env vars so they propagate naturally through
+  // Pass all .env vars as Docker env vars so they propagate naturally through
   // the process tree (container → Claude Code CLI → MCP server children).
-  // Auth tokens (OAUTH, ANTHROPIC_API_KEY) go via the stdin secrets pipeline instead.
-  const mcpEnv = readEnvFile(['HA_URL', 'HA_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
-  for (const [key, value] of Object.entries(mcpEnv)) {
+  // Secrets and host-only config are excluded via blocklist — they travel
+  // via the stdin secrets pipeline or are irrelevant inside the container.
+  const ENV_BLOCKLIST = new Set([
+    // Secrets — passed via stdin, must not leak to child process env
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+    // Host-only config — not meaningful inside the container
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_ONLY',
+    'ASSISTANT_NAME',
+    'ASSISTANT_HAS_OWN_NUMBER',
+  ]);
+  const toolEnv = readAllEnvVars(ENV_BLOCKLIST);
+  for (const [key, value] of Object.entries(toolEnv)) {
     args.push('-e', `${key}=${value}`);
   }
 
