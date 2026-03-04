@@ -51,9 +51,9 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
-  image_data?: string;        // base64-encoded JPEG
-  image_path?: string;        // relative to group folder, e.g. "images/2026-02-27-abc.jpg"
-  image_mime_type?: string;   // 'image/jpeg'
+  image_data?: string; // base64-encoded JPEG
+  image_path?: string; // relative to group folder, e.g. "images/2026-02-27-abc.jpg"
+  image_mime_type?: string; // 'image/jpeg'
 }
 
 export interface ScheduledTask {

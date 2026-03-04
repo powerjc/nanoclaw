@@ -107,14 +107,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     path.join(DATA_DIR, 'ipc', sourceGroup),
                     data.filePath,
                   );
-                  await deps.sendFile(
-                    data.chatJid,
-                    hostFilePath,
-                    data.caption,
-                  );
+                  await deps.sendFile(data.chatJid, hostFilePath, data.caption);
                   try {
                     fs.unlinkSync(hostFilePath);
-                  } catch { }
+                  } catch {}
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC file sent',
@@ -302,7 +298,10 @@ export async function processTaskIpc(
           { taskId, sourceGroup, targetFolder, contextMode },
           'Task created via IPC',
         );
-        deps.refreshTasksSnapshot(targetFolder, targetFolder === sourceGroup ? isMain : true);
+        deps.refreshTasksSnapshot(
+          targetFolder,
+          targetFolder === sourceGroup ? isMain : true,
+        );
       }
       break;
 

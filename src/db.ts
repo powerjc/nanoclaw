@@ -99,8 +99,9 @@ function createSchema(database: Database.Database): void {
       `ALTER TABLE messages ADD COLUMN is_bot_message INTEGER DEFAULT 0`,
     );
     // Backfill: mark existing bot messages that used the content prefix pattern
-    database
-      .prepare(`UPDATE messages SET is_bot_message = 1 WHERE content LIKE ?`)
+    database.prepare(
+      `UPDATE messages SET is_bot_message = 1 WHERE content LIKE ?`,
+    );
   } catch {
     /* column already exists */
   }
@@ -553,15 +554,15 @@ export function getRegisteredGroup(
     .prepare('SELECT * FROM registered_groups WHERE jid = ?')
     .get(jid) as
     | {
-      jid: string;
-      name: string;
-      folder: string;
-      trigger_pattern: string;
-      added_at: string;
-      container_config: string | null;
-      requires_trigger: number | null;
-      is_main: number | null;
-    }
+        jid: string;
+        name: string;
+        folder: string;
+        trigger_pattern: string;
+        added_at: string;
+        container_config: string | null;
+        requires_trigger: number | null;
+        is_main: number | null;
+      }
     | undefined;
   if (!row) return undefined;
   if (!isValidGroupFolder(row.folder)) {

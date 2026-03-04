@@ -52,18 +52,18 @@ beforeEach(() => {
   setRegisteredGroup('third@g.us', THIRD_GROUP);
 
   deps = {
-    sendMessage: async () => { },
-    sendFile: async () => { },
-    refreshTasksSnapshot: () => { },
+    sendMessage: async () => {},
+    sendFile: async () => {},
+    refreshTasksSnapshot: () => {},
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
       setRegisteredGroup(jid, group);
       // Mock the fs.mkdirSync that registerGroup does
     },
-    syncGroups: async () => { },
+    syncGroups: async () => {},
     getAvailableGroups: () => [],
-    writeGroupsSnapshot: () => { },
+    writeGroupsSnapshot: () => {},
   };
 });
 

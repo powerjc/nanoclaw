@@ -23,7 +23,11 @@ interface RoutingConfig {
   };
 }
 
-type RouteDecision = 'ollama-forced' | 'ollama-simple' | 'ollama-privacy' | 'claude';
+type RouteDecision =
+  | 'ollama-forced'
+  | 'ollama-simple'
+  | 'ollama-privacy'
+  | 'claude';
 
 // Cached config — loaded once from disk
 let cachedConfig: RoutingConfig | null = null;
@@ -37,22 +41,29 @@ function loadConfig(): RoutingConfig | null {
     logger.info({ configPath }, 'LLM routing config loaded');
     return cachedConfig;
   } catch (err) {
-    logger.warn({ err, configPath }, 'LLM routing config not found or invalid, routing disabled');
+    logger.warn(
+      { err, configPath },
+      'LLM routing config not found or invalid, routing disabled',
+    );
     return null;
   }
 }
 
 function lastUserMessage(messages: NewMessage[]): NewMessage {
-  const userMessages = messages.filter((m) => !m.is_from_me && !m.is_bot_message);
-  return userMessages.length > 0 ? userMessages[userMessages.length - 1] : messages[messages.length - 1];
+  const userMessages = messages.filter(
+    (m) => !m.is_from_me && !m.is_bot_message,
+  );
+  return userMessages.length > 0
+    ? userMessages[userMessages.length - 1]
+    : messages[messages.length - 1];
 }
 
 /**
  * Strip @mention and !local prefix, returning the bare query text.
  */
 function extractLastUserText(messages: NewMessage[]): string {
-  return lastUserMessage(messages).content
-    .replace(/^@\S+\s*/u, '')   // strip @Andy trigger
+  return lastUserMessage(messages)
+    .content.replace(/^@\S+\s*/u, '') // strip @Andy trigger
     .replace(/^!local\s*/i, '') // strip !local prefix
     .trim();
 }
@@ -61,13 +72,23 @@ function extractLastUserText(messages: NewMessage[]): string {
  * Text after stripping only the @mention — used to detect !local before removing it.
  */
 function mentionStripped(messages: NewMessage[]): string {
-  return lastUserMessage(messages).content.replace(/^@\S+\s*/u, '').trim();
+  return lastUserMessage(messages)
+    .content.replace(/^@\S+\s*/u, '')
+    .trim();
 }
 
-function hasPrivacyKeyword(messages: NewMessage[], keywords: string[]): boolean {
-  const allText = messages.map((m) => m.content).join(' ').toLowerCase();
+function hasPrivacyKeyword(
+  messages: NewMessage[],
+  keywords: string[],
+): boolean {
+  const allText = messages
+    .map((m) => m.content)
+    .join(' ')
+    .toLowerCase();
   return keywords.some((kw) => {
-    const pattern = new RegExp(`\\b${kw.toLowerCase().replace(/\s+/g, '\\s+')}\\b`);
+    const pattern = new RegExp(
+      `\\b${kw.toLowerCase().replace(/\s+/g, '\\s+')}\\b`,
+    );
     return pattern.test(allText);
   });
 }
@@ -75,7 +96,11 @@ function hasPrivacyKeyword(messages: NewMessage[], keywords: string[]): boolean 
 // Starters that don't require a '?' (imperative lookups)
 const COMMAND_STARTERS = new Set(['define', 'explain']);
 
-function isSimpleQuestion(text: string, maxWords: number, simpleStarters: string[]): boolean {
+function isSimpleQuestion(
+  text: string,
+  maxWords: number,
+  simpleStarters: string[],
+): boolean {
   const words = text.trim().split(/\s+/);
   if (words.length > maxWords) return false;
   const firstWord = words[0].toLowerCase().replace(/[^a-z]/g, '');
@@ -102,7 +127,13 @@ export function classifyMessages(messages: NewMessage[]): RouteDecision {
 
   // Priority 2: short factual questions → local
   const userText = extractLastUserText(messages);
-  if (isSimpleQuestion(userText, routing.maxWordsForSimple, routing.simpleStarters)) {
+  if (
+    isSimpleQuestion(
+      userText,
+      routing.maxWordsForSimple,
+      routing.simpleStarters,
+    )
+  ) {
     return 'ollama-simple';
   }
 
@@ -131,7 +162,9 @@ export async function tryOllamaRoute(
 
   const userText = extractLastUserText(messages);
   const model =
-    decision === 'ollama-simple' ? cfg.ollama.models.simple : cfg.ollama.models.general;
+    decision === 'ollama-simple'
+      ? cfg.ollama.models.simple
+      : cfg.ollama.models.general;
   // ollama-forced and ollama-privacy both use the general model
 
   logger.info(
@@ -147,11 +180,18 @@ export async function tryOllamaRoute(
       cfg.ollama.timeoutMs,
     );
 
-    const indicator = decision === 'ollama-privacy' ? '🔒 [Private]' : '🤖 [Local]';
-    logger.info({ group: groupName, decision, model }, 'Ollama response received');
+    const indicator =
+      decision === 'ollama-privacy' ? '🔒 [Private]' : '🤖 [Local]';
+    logger.info(
+      { group: groupName, decision, model },
+      'Ollama response received',
+    );
     return `${indicator} ${response}`;
   } catch (err) {
-    logger.warn({ group: groupName, decision, err }, 'Ollama failed, falling back to Claude');
+    logger.warn(
+      { group: groupName, decision, err },
+      'Ollama failed, falling back to Claude',
+    );
     return null;
   }
 }

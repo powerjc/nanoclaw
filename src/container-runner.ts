@@ -32,22 +32,29 @@ import { RegisteredGroup } from './types.js';
  * Lines matching ^@(.+)$ are replaced with the compiled content of the referenced file.
  * Circular imports are detected and skipped with a warning comment.
  */
-function compileClaudeMd(filePath: string, visited = new Set<string>()): string {
+function compileClaudeMd(
+  filePath: string,
+  visited = new Set<string>(),
+): string {
   if (!fs.existsSync(filePath)) return '';
   const resolved = path.resolve(filePath);
   if (visited.has(resolved)) return `<!-- @import circular: ${filePath} -->`;
   visited.add(resolved);
   const content = fs.readFileSync(resolved, 'utf-8');
   const dir = path.dirname(resolved);
-  return content.split('\n').map(line => {
-    const match = line.match(/^@(.+)$/);
-    if (match) {
-      const importPath = path.resolve(dir, match[1].trim());
-      if (!fs.existsSync(importPath)) return `<!-- @import not found: ${match[1].trim()} -->`;
-      return compileClaudeMd(importPath, visited);
-    }
-    return line;
-  }).join('\n');
+  return content
+    .split('\n')
+    .map((line) => {
+      const match = line.match(/^@(.+)$/);
+      if (match) {
+        const importPath = path.resolve(dir, match[1].trim());
+        if (!fs.existsSync(importPath))
+          return `<!-- @import not found: ${match[1].trim()} -->`;
+        return compileClaudeMd(importPath, visited);
+      }
+      return line;
+    })
+    .join('\n');
 }
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -63,7 +70,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
-  imageData?: string;       // base64 JPEG (optional)
+  imageData?: string; // base64 JPEG (optional)
   imageMimeType?: string;
 }
 
@@ -147,7 +154,12 @@ function buildVolumeMounts(
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile(['HA_URL', 'HA_TOKEN', 'PAPERLESS_URL', 'PAPERLESS_TOKEN']);
+  const { HA_URL, HA_TOKEN, PAPERLESS_URL, PAPERLESS_TOKEN } = readEnvFile([
+    'HA_URL',
+    'HA_TOKEN',
+    'PAPERLESS_URL',
+    'PAPERLESS_TOKEN',
+  ]);
   const settings: Record<string, unknown> = {
     env: {
       // Enable agent swarms (subagent orchestration)
@@ -275,7 +287,14 @@ function buildContainerArgs(
   // Pass MCP config vars as Docker env vars so they propagate naturally through
   // the process tree (container → Claude Code CLI → MCP server children).
   // Auth tokens (OAUTH, ANTHROPIC_API_KEY) go via the stdin secrets pipeline instead.
-  const mcpEnv = readEnvFile(['HA_URL', 'HA_TOKEN', 'SONARR_URL', 'SONARR_API_KEY', 'RADARR_URL', 'RADARR_API_KEY']);
+  const mcpEnv = readEnvFile([
+    'HA_URL',
+    'HA_TOKEN',
+    'SONARR_URL',
+    'SONARR_API_KEY',
+    'RADARR_URL',
+    'RADARR_API_KEY',
+  ]);
   for (const [key, value] of Object.entries(mcpEnv)) {
     args.push('-e', `${key}=${value}`);
   }
@@ -313,14 +332,20 @@ export async function runContainerAgent(
     const raw = fs.readFileSync(groupClaudeMdPath, 'utf-8');
     const compiled = compileClaudeMd(groupClaudeMdPath);
     if (compiled !== raw) {
-      compiledClaudeMdTmp = path.join(os.tmpdir(), `nanoclaw-compiled-${group.folder}-${Date.now()}.md`);
+      compiledClaudeMdTmp = path.join(
+        os.tmpdir(),
+        `nanoclaw-compiled-${group.folder}-${Date.now()}.md`,
+      );
       fs.writeFileSync(compiledClaudeMdTmp, compiled, 'utf-8');
       mounts.push({
         hostPath: compiledClaudeMdTmp,
         containerPath: '/workspace/group/CLAUDE.md',
         readonly: true,
       });
-      logger.debug({ group: group.name, tmpFile: compiledClaudeMdTmp }, 'Shadowing CLAUDE.md with compiled version');
+      logger.debug(
+        { group: group.name, tmpFile: compiledClaudeMdTmp },
+        'Shadowing CLAUDE.md with compiled version',
+      );
     }
   }
 
@@ -356,7 +381,11 @@ export async function runContainerAgent(
 
   const cleanupTmp = () => {
     if (compiledClaudeMdTmp) {
-      try { fs.unlinkSync(compiledClaudeMdTmp); } catch { /* ignore */ }
+      try {
+        fs.unlinkSync(compiledClaudeMdTmp);
+      } catch {
+        /* ignore */
+      }
       compiledClaudeMdTmp = undefined;
     }
   };

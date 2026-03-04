@@ -167,7 +167,10 @@ export class TelegramChannel implements Channel {
           .toBuffer();
         const timestamp = new Date(ctx.message.date * 1000).toISOString();
         const filename = `${timestamp.replace(/[:.]/g, '-')}-${largest.file_unique_id}.jpg`;
-        const imagesDir = path.join(resolveGroupFolderPath(group.folder), 'images');
+        const imagesDir = path.join(
+          resolveGroupFolderPath(group.folder),
+          'images',
+        );
         await fsp.mkdir(imagesDir, { recursive: true });
         await fsp.writeFile(path.join(imagesDir, filename), resized);
         const senderName =
@@ -188,16 +191,17 @@ export class TelegramChannel implements Channel {
           image_path: `images/${filename}`,
           image_mime_type: 'image/jpeg',
         });
-        logger.info({ chatJid, filename, bytes: resized.length }, 'Telegram photo processed');
+        logger.info(
+          { chatJid, filename, bytes: resized.length },
+          'Telegram photo processed',
+        );
       } catch (err) {
         logger.error({ chatJid, err }, 'Failed to process Telegram photo');
         storeNonText(ctx, '[Photo - processing failed]');
       }
     });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -247,13 +251,16 @@ export class TelegramChannel implements Channel {
       const chunks =
         text.length <= MAX_LENGTH
           ? [text]
-          : Array.from({ length: Math.ceil(text.length / MAX_LENGTH) }, (_, i) =>
-              text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
+          : Array.from(
+              { length: Math.ceil(text.length / MAX_LENGTH) },
+              (_, i) => text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
             );
 
       for (const chunk of chunks) {
         try {
-          await this.bot.api.sendMessage(numericId, chunk, { parse_mode: 'Markdown' });
+          await this.bot.api.sendMessage(numericId, chunk, {
+            parse_mode: 'Markdown',
+          });
         } catch {
           // Fall back to plain text if markdown parsing fails (e.g. unbalanced entities)
           await this.bot.api.sendMessage(numericId, chunk);

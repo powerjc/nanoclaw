@@ -263,7 +263,7 @@ describe('GroupQueue', () => {
 
     // Scheduler poll re-discovers the same task while it's running —
     // this must be silently dropped
-    const dupFn = vi.fn(async () => { });
+    const dupFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', dupFn);
     await vi.advanceTimersByTimeAsync(10);
 
@@ -305,7 +305,7 @@ describe('GroupQueue', () => {
     );
 
     // Enqueue a task while container is active but NOT idle
-    const taskFn = vi.fn(async () => { });
+    const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
     // _close should NOT have been written (container is working, not idle)
@@ -349,7 +349,7 @@ describe('GroupQueue', () => {
     const writeFileSync = vi.mocked(fs.default.writeFileSync);
     writeFileSync.mockClear();
 
-    const taskFn = vi.fn(async () => { });
+    const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
     // _close SHOULD have been written (container is idle)
@@ -393,7 +393,7 @@ describe('GroupQueue', () => {
     const writeFileSync = vi.mocked(fs.default.writeFileSync);
     writeFileSync.mockClear();
 
-    const taskFn = vi.fn(async () => { });
+    const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
     const closeWrites = writeFileSync.mock.calls.filter(
@@ -460,7 +460,7 @@ describe('GroupQueue', () => {
     const writeFileSync = vi.mocked(fs.default.writeFileSync);
     writeFileSync.mockClear();
 
-    const taskFn = vi.fn(async () => { });
+    const taskFn = vi.fn(async () => {});
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
 
     let closeWrites = writeFileSync.mock.calls.filter(

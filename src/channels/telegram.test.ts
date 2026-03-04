@@ -558,7 +558,9 @@ describe('TelegramChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'tg:100200300',
-        expect.objectContaining({ content: '[Photo - processing failed] Look at this' }),
+        expect.objectContaining({
+          content: '[Photo - processing failed] Look at this',
+        }),
       );
     });
 
@@ -1026,7 +1028,11 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      await channel.sendFile('tg:100200300', '/tmp/chart.png', 'Here is the chart');
+      await channel.sendFile(
+        'tg:100200300',
+        '/tmp/chart.png',
+        'Here is the chart',
+      );
 
       expect(currentBot().api.sendPhoto).toHaveBeenCalledWith(
         '100200300',
@@ -1040,7 +1046,11 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      await channel.sendFile('tg:100200300', '/tmp/report.pdf', 'Monthly report');
+      await channel.sendFile(
+        'tg:100200300',
+        '/tmp/report.pdf',
+        'Monthly report',
+      );
 
       expect(currentBot().api.sendDocument).toHaveBeenCalledWith(
         '100200300',
@@ -1068,7 +1078,9 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      currentBot().api.sendPhoto.mockRejectedValueOnce(new Error('Network error'));
+      currentBot().api.sendPhoto.mockRejectedValueOnce(
+        new Error('Network error'),
+      );
 
       await expect(
         channel.sendFile('tg:100200300', '/tmp/chart.png'),
@@ -1080,7 +1092,9 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      currentBot().api.sendDocument.mockRejectedValueOnce(new Error('Upload failed'));
+      currentBot().api.sendDocument.mockRejectedValueOnce(
+        new Error('Upload failed'),
+      );
 
       await expect(
         channel.sendFile('tg:100200300', '/tmp/report.pdf'),

@@ -65,7 +65,10 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-const pendingImageData = new Map<string, { base64: string; mimeType: string }>();
+const pendingImageData = new Map<
+  string,
+  { base64: string; mimeType: string }
+>();
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -191,7 +194,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length, hasImage: !!imageData },
+    {
+      group: group.name,
+      messageCount: missedMessages.length,
+      hasImage: !!imageData,
+    },
     'Processing messages',
   );
 
@@ -213,7 +220,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Try Ollama for simple/privacy queries — skip spawning a container
   // Skip Ollama entirely if the batch contains an image (Ollama has no vision)
-  const ollamaResponse = imageData ? null : await tryOllamaRoute(missedMessages, group.name);
+  const ollamaResponse = imageData
+    ? null
+    : await tryOllamaRoute(missedMessages, group.name);
   if (ollamaResponse !== null) {
     await channel.setTyping?.(chatJid, false);
     await channel.sendMessage(chatJid, ollamaResponse);
@@ -223,32 +232,41 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  }, imageData);
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    imageData,
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -314,12 +332,12 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-      if (output.newSessionId) {
-        sessions[group.folder] = output.newSessionId;
-        setSession(group.folder, output.newSessionId);
+        if (output.newSessionId) {
+          sessions[group.folder] = output.newSessionId;
+          setSession(group.folder, output.newSessionId);
+        }
+        await onOutput(output);
       }
-      await onOutput(output);
-    }
     : undefined;
 
   try {
@@ -436,8 +454,12 @@ async function startMessageLoop(): Promise<void> {
 
           // Try Ollama before piping to container or starting a new one
           // Skip if any message in the batch has pending image data (Ollama has no vision)
-          const hasImage = messagesToSend.some((m) => pendingImageData.has(m.id));
-          const ollamaResponse = hasImage ? null : await tryOllamaRoute(messagesToSend, group.name);
+          const hasImage = messagesToSend.some((m) =>
+            pendingImageData.has(m.id),
+          );
+          const ollamaResponse = hasImage
+            ? null
+            : await tryOllamaRoute(messagesToSend, group.name);
           if (ollamaResponse !== null) {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
@@ -527,11 +549,7 @@ async function main(): Promise<void> {
       }
 
       // Sender allowlist drop mode: discard messages from denied senders before storing
-      if (
-        !msg.is_from_me &&
-        !msg.is_bot_message &&
-        registeredGroups[chatJid]
-      ) {
+      if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
         if (
           shouldDropMessage(chatJid, cfg) &&
@@ -619,15 +637,19 @@ async function main(): Promise<void> {
     },
     refreshTasksSnapshot: (groupFolder, isMain) => {
       const tasks = getAllTasks();
-      writeTasksSnapshot(groupFolder, isMain, tasks.map((t) => ({
-        id: t.id,
-        groupFolder: t.group_folder,
-        prompt: t.prompt,
-        schedule_type: t.schedule_type,
-        schedule_value: t.schedule_value,
-        status: t.status,
-        next_run: t.next_run,
-      })));
+      writeTasksSnapshot(
+        groupFolder,
+        isMain,
+        tasks.map((t) => ({
+          id: t.id,
+          groupFolder: t.group_folder,
+          prompt: t.prompt,
+          schedule_type: t.schedule_type,
+          schedule_value: t.schedule_value,
+          status: t.status,
+          next_run: t.next_run,
+        })),
+      );
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
@@ -654,7 +676,7 @@ async function main(): Promise<void> {
 const isDirectRun =
   process.argv[1] &&
   new URL(import.meta.url).pathname ===
-  new URL(`file://${process.argv[1]}`).pathname;
+    new URL(`file://${process.argv[1]}`).pathname;
 
 if (isDirectRun) {
   main().catch((err) => {
