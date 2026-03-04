@@ -3,7 +3,7 @@
 
 FROM node:22-slim
 
-# Install system dependencies for Chromium
+# Install system dependencies for Chromium and Python
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -25,8 +25,18 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     python3 \
+    python3-pip \
     python3-requests \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages for integrations
+RUN pip3 install --break-system-packages \
+    homeharvest \
+    pandas \
+    google-api-python-client \
+    google-auth-httplib2 \
+    google-auth-oauthlib
+
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
