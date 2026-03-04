@@ -99,8 +99,15 @@ export class TelegramChannel implements Channel {
       }
 
       // Store chat metadata for discovery
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'telegram',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
@@ -143,8 +150,15 @@ export class TelegramChannel implements Channel {
         'Unknown';
       const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
 
-      const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-      this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
       this.opts.onMessage(chatJid, {
         id: ctx.message.message_id.toString(),
         chat_jid: chatJid,
@@ -182,8 +196,15 @@ export class TelegramChannel implements Channel {
           ctx.from?.username ||
           ctx.from?.id?.toString() ||
           'Unknown';
-        const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
-        this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+        const isGroup =
+          ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+        this.opts.onChatMetadata(
+          chatJid,
+          timestamp,
+          undefined,
+          'telegram',
+          isGroup,
+        );
         this.opts.onMessage(chatJid, {
           id: ctx.message.message_id.toString(),
           chat_jid: chatJid,
@@ -258,9 +279,9 @@ export class TelegramChannel implements Channel {
         text.length <= MAX_LENGTH
           ? [text]
           : Array.from(
-            { length: Math.ceil(text.length / MAX_LENGTH) },
-            (_, i) => text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
-          );
+              { length: Math.ceil(text.length / MAX_LENGTH) },
+              (_, i) => text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
+            );
 
       for (const chunk of chunks) {
         try {

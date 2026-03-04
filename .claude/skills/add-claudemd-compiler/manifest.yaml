@@ -1,0 +1,13 @@
+skill: add-claudemd-compiler
+version: 1.0.0
+description: |
+  Adds CLAUDE.md dynamic @-import compilation.
+  This skill shadow-mounts a compiled version of the group's CLAUDE.md
+  into the container if it contains @imports, ensuring the agent sees
+  the expanded content.
+core_version: 0.1.0
+adds:
+  - src/claude-md-compiler.ts
+modifies:
+  - src/container-runner.ts
+test: "npm run build"
