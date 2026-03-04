@@ -191,17 +191,6 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Gmail credentials (read-write so MCP can refresh OAuth tokens)
-  const homeDir = process.env.HOME || os.homedir();
-  const gmailDir = path.join(homeDir, '.gmail-mcp');
-  if (fs.existsSync(gmailDir)) {
-    mounts.push({
-      hostPath: gmailDir,
-      containerPath: '/home/node/.gmail-mcp',
-      readonly: false,
-    });
-  }
-
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
