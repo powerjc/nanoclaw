@@ -43,18 +43,6 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
-## WhatsApp Formatting (and other messaging apps)
-
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
-- *Bold* (single asterisks) (NEVER **double asterisks**)
-- _Italic_ (underscores)
-- • Bullets (bullet points)
-- ```Code blocks``` (triple backticks)
-
-Keep messages clean and readable for WhatsApp.
-
----
-
 ## Admin Context
 
 This is the **main channel**, which has elevated privileges.
@@ -97,7 +85,7 @@ Available groups are provided in `/workspace/ipc/available_groups.json`:
 }
 ```
 
-Groups are ordered by most recent activity. The list is synced from WhatsApp daily.
+Groups are ordered by most recent activity. The list is synced from Telegram daily.
 
 If a group the user mentions isn't in the list, request a fresh sync:
 
@@ -121,7 +109,7 @@ sqlite3 /workspace/project/store/messages.db "
 
 ### Registered Groups Config
 
-Groups are registered in `/workspace/project/data/registered_groups.json`:
+Groups are in the registered in the SQLite `registered_groups` table 
 
 ```json
 {
@@ -135,11 +123,12 @@ Groups are registered in `/workspace/project/data/registered_groups.json`:
 ```
 
 Fields:
-- **Key**: The WhatsApp JID (unique identifier for the chat)
+- **Key**: The Telegram chatid (unique identifier for the chat)
 - **name**: Display name for the group
 - **folder**: Folder name under `groups/` for this group's files and memory
 - **trigger**: The trigger word (usually same as global, but could differ)
 - **requiresTrigger**: Whether `@trigger` prefix is needed (default: `true`). Set to `false` for solo/personal chats where all messages should be processed
+- **isMain**: Whether this is the main control group (elevated privileges, no trigger required)
 - **added_at**: ISO timestamp when registered
 
 ### Trigger Behavior
@@ -224,8 +213,10 @@ The task will run in that group's context with access to their files and memory.
 ---
 
 ## Tool Integrations
-
-@./integrations/paperless.md
-@./integrations/jellyfin.md
-@./integrations/ssh.md
 @./integrations/file-sending.md
+@./integrations/gmail.md
+@./integrations/jellyfin.md
+@./integrations/mealie.md
+@./integrations/media-management.md
+@./integrations/paperless.md
+@./integrations/ssh.md
