@@ -1,0 +1,12 @@
+skill: add-paperless-mcp
+version: 1.0.0
+description: |
+  Adds Paperless-ngx integration to NanoClaw.
+  Teaches the agent how to search, read, tag, and manage documents
+  using the Paperless REST API via curl.
+core_version: 0.1.0
+adds:
+  - container/skills/paperless/SKILL.md
+modifies:
+  - src/container-runner.ts
+test: "npm run build"

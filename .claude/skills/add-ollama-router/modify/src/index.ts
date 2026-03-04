@@ -226,6 +226,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     await channel.sendMessage(chatJid, ollamaResponse);
     return true;
   }
+
   let hadError = false;
   let outputSentToUser = false;
 
@@ -257,6 +258,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (result.status === 'success') {
         queue.notifyIdle(chatJid);
       }
+
       if (result.status === 'error') {
         hadError = true;
       }

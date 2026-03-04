@@ -1,0 +1,14 @@
+skill: add-homeassistant-mcp
+version: 1.0.0
+description: |
+  Adds Home Assistant integration to NanoClaw.
+  Enables the agent to control your smart home devices via the official
+  Home Assistant MCP server, as well as a custom MCP server for
+  managing the HA shopping list.
+core_version: 0.1.0
+adds:
+  - container/agent-runner/src/ha-shopping-list-mcp.ts
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+test: "npm run build"

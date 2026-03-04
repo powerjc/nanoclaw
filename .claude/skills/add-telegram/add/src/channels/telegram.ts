@@ -1,7 +1,12 @@
-import { Bot } from 'grammy';
+import { promises as fsp } from 'fs';
+import path from 'path';
+
+import { Bot, InputFile } from 'grammy';
+import sharp from 'sharp';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -151,11 +156,58 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+      try {
+        const largest = ctx.message.photo[ctx.message.photo.length - 1];
+        const file = await ctx.api.getFile(largest.file_id);
+        const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
+        const resized = await sharp(buf)
+          .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        const timestamp = new Date(ctx.message.date * 1000).toISOString();
+        const filename = `${timestamp.replace(/[:.]/g, '-')}-${largest.file_unique_id}.jpg`;
+        const imagesDir = path.join(
+          resolveGroupFolderPath(group.folder),
+          'images',
+        );
+        await fsp.mkdir(imagesDir, { recursive: true });
+        await fsp.writeFile(path.join(imagesDir, filename), resized);
+        const senderName =
+          ctx.from?.first_name ||
+          ctx.from?.username ||
+          ctx.from?.id?.toString() ||
+          'Unknown';
+        const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+        this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', isGroup);
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: ctx.message.caption || 'What do you see in this image?',
+          timestamp,
+          is_from_me: false,
+          image_data: resized.toString('base64'),
+          image_path: `images/${filename}`,
+          image_mime_type: 'image/jpeg',
+        });
+        logger.info(
+          { chatJid, filename, bytes: resized.length },
+          'Telegram photo processed',
+        );
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to process Telegram photo');
+        storeNonText(ctx, '[Photo - processing failed]');
+      }
+    });
+
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -202,19 +254,57 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
+      const chunks =
+        text.length <= MAX_LENGTH
+          ? [text]
+          : Array.from(
+            { length: Math.ceil(text.length / MAX_LENGTH) },
+            (_, i) => text.slice(i * MAX_LENGTH, (i + 1) * MAX_LENGTH),
           );
+
+      for (const chunk of chunks) {
+        try {
+          await this.bot.api.sendMessage(numericId, chunk, {
+            parse_mode: 'Markdown',
+          });
+        } catch {
+          // Fall back to plain text if markdown parsing fails (e.g. unbalanced entities)
+          await this.bot.api.sendMessage(numericId, chunk);
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async sendFile(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const ext = path.extname(filePath).toLowerCase();
+      const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+      const file = new InputFile(filePath);
+      if (imageExts.includes(ext)) {
+        await this.bot.api.sendPhoto(
+          numericId,
+          file,
+          caption ? { caption } : {},
+        );
+      } else {
+        await this.bot.api.sendDocument(
+          numericId,
+          file,
+          caption ? { caption } : {},
+        );
+      }
+      logger.info({ jid }, 'Telegram file sent');
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Telegram file');
     }
   }
 

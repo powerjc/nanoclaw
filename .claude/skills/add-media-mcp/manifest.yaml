@@ -1,0 +1,13 @@
+skill: add-media-mcp
+version: 1.0.0
+description: |
+  Adds Sonarr and Radarr MCP server functionality to NanoClaw.
+  Allows the agent to search for, monitor, and manage movies and TV shows
+  in your homelab.
+core_version: 0.1.0
+adds:
+  - container/agent-runner/src/sonarr-radarr-mcp.ts
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+test: "npm run build"
