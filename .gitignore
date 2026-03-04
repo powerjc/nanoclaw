@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-
+.npm-cache/
 # Build output
 dist/
 
@@ -24,6 +24,9 @@ groups/global/*
 
 # Local config (contains environment-specific details like private IPs)
 llm-routing.json
+
+# Temp files
+.tmp-*
 
 # OS
 .DS_Store

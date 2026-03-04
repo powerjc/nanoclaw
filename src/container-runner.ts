@@ -279,8 +279,6 @@ function buildContainerArgs(
   for (const [key, value] of Object.entries(mcpEnv)) {
     args.push('-e', `${key}=${value}`);
   }
-
-
   for (const mount of mounts) {
     if (mount.readonly) {
       args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));

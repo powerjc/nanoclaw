@@ -1,218 +1,173 @@
 ---
 name: setup
-description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate WhatsApp, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
+description: Run initial NanoClaw setup. Use when user wants to install dependencies, authenticate messaging channels, register their main channel, or start the background services. Triggers on "setup", "install", "configure nanoclaw", or first-time setup requests.
 ---
 
 # NanoClaw Setup
 
-Run setup scripts automatically. Only pause when user action is required (WhatsApp authentication, configuration choices). Scripts live in `.claude/skills/setup/scripts/` and emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
+Run setup steps automatically. Only pause when user action is required (channel authentication, configuration choices). Setup uses `bash setup.sh` for bootstrap, then `npx tsx setup/index.ts --step <name>` for all other steps. Steps emit structured status blocks to stdout. Verbose logs go to `logs/setup.log`.
 
-**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. scanning a QR code, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
+**Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. authenticating a channel, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
 **UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
-## 1. Check Environment
+## 1. Bootstrap (Node.js + Dependencies)
 
-Run `./.claude/skills/setup/scripts/01-check-environment.sh` and parse the status block.
+Run `bash setup.sh` and parse the status block.
 
-- If HAS_AUTH=true → note that WhatsApp auth exists, offer to skip step 5
+- If NODE_OK=false → Node.js is missing or too old. Use `AskUserQuestion: Would you like me to install Node.js 22?` If confirmed:
+  - macOS: `brew install node@22` (if brew available) or install nvm then `nvm install 22`
+  - Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`, or nvm
+  - After installing Node, re-run `bash setup.sh`
+- If DEPS_OK=false → Read `logs/setup.log`. Try: delete `node_modules` and `package-lock.json`, re-run `bash setup.sh`. If native module build fails, install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry.
+- If NATIVE_OK=false → better-sqlite3 failed to load. Install build tools and re-run.
+- Record PLATFORM and IS_WSL for later steps.
+
+## 2. Check Environment
+
+Run `npx tsx setup/index.ts --step environment` and parse the status block.
+
+- If HAS_AUTH=true → WhatsApp is already configured, note for step 5
 - If HAS_REGISTERED_GROUPS=true → note existing config, offer to skip or reconfigure
-- Record PLATFORM, APPLE_CONTAINER, and DOCKER values for step 3
-
-**If NODE_OK=false:**
-
-Node.js is missing or too old. Ask the user if they'd like you to install it. Offer options based on platform:
-
-- macOS: `brew install node@22` (if brew available) or install nvm then `nvm install 22`
-- Linux: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs`, or nvm
-
-If brew/nvm aren't installed, install them first (`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` for brew, `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash` for nvm). After installing Node, re-run the environment check to confirm NODE_OK=true.
-
-## 2. Install Dependencies
-
-Run `./.claude/skills/setup/scripts/02-install-deps.sh` and parse the status block.
-
-**If failed:** Read the tail of `logs/setup.log` to diagnose. Common fixes to try automatically:
-1. Delete `node_modules` and `package-lock.json`, then re-run the script
-2. If permission errors: suggest running with corrected permissions
-3. If specific package fails to build (native modules like better-sqlite3): install build tools (`xcode-select --install` on macOS, `build-essential` on Linux), then retry
-
-Only ask the user for help if multiple retries fail with the same error.
+- Record APPLE_CONTAINER and DOCKER values for step 3
 
 ## 3. Container Runtime
 
 ### 3a. Choose runtime
 
-Use the environment check results from step 1 to decide which runtime to use:
+Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM from step 1.
 
-- PLATFORM=linux → Docker
-- PLATFORM=macos + APPLE_CONTAINER=installed → apple-container
-- PLATFORM=macos + DOCKER=running + APPLE_CONTAINER=not_found → Docker
-- PLATFORM=macos + DOCKER=installed_not_running → start Docker: `open -a Docker`. Wait 15s, re-check with `docker info`. If still not running, tell the user Docker is starting up and poll a few more times.
-- Neither available → AskUserQuestion: Apple Container (recommended for macOS) vs Docker?
-  - Apple Container: tell user to download from https://github.com/apple/container/releases and install the .pkg. Wait for confirmation, then verify with `container --version`.
-  - Docker on macOS: install via `brew install --cask docker`, then `open -a Docker` and wait for it to start. If brew not available, direct to Docker Desktop download.
-  - Docker on Linux: install with `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`. Note: user may need to log out/in for group membership.
+- PLATFORM=linux → Docker (only option)
+- PLATFORM=macos + APPLE_CONTAINER=installed → Use `AskUserQuestion: Docker (cross-platform) or Apple Container (native macOS)?` If Apple Container, run `/convert-to-apple-container` now, then skip to 4c.
+- PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
 
-### 3b. Docker conversion gate (REQUIRED before building)
+### 3a-docker. Install Docker
 
-**If the chosen runtime is Docker**, you MUST check whether the source code has already been converted from Apple Container to Docker. Do NOT skip this step. Run:
+- DOCKER=running → continue to 4b
+- DOCKER=installed_not_running → start Docker: `open -a Docker` (macOS) or `sudo systemctl start docker` (Linux). Wait 15s, re-check with `docker info`.
+- DOCKER=not_found → Use `AskUserQuestion: Docker is required for running agents. Would you like me to install it?` If confirmed:
+  - macOS: install via `brew install --cask docker`, then `open -a Docker` and wait for it to start. If brew not available, direct to Docker Desktop download at https://docker.com/products/docker-desktop
+  - Linux: install with `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker $USER`. Note: user may need to log out/in for group membership.
+
+### 3b. Apple Container conversion gate (if needed)
+
+**If the chosen runtime is Apple Container**, you MUST check whether the source code has already been converted from Docker to Apple Container. Do NOT skip this step. Run:
 
 ```bash
-grep -q 'container system status' src/index.ts && echo "NEEDS_CONVERSION" || echo "ALREADY_CONVERTED"
+grep -q "CONTAINER_RUNTIME_BIN = 'container'" src/container-runtime.ts && echo "ALREADY_CONVERTED" || echo "NEEDS_CONVERSION"
 ```
 
-Check these three files for Apple Container references:
-- `src/index.ts` — look for `container system status` or `ensureContainerSystemRunning`
-- `src/container-runner.ts` — look for `spawn('container'`
-- `container/build.sh` — look for `container build`
+**If NEEDS_CONVERSION**, the source code still uses Docker as the runtime. You MUST run the `/convert-to-apple-container` skill NOW, before proceeding to the build step.
 
-**If ANY of those Apple Container references exist**, the source code has NOT been converted. You MUST run the `/convert-to-docker` skill NOW, before proceeding to the build step. Do not attempt to build the container image until the conversion is complete.
+**If ALREADY_CONVERTED**, the code already uses Apple Container. Continue to 4c.
 
-**If none of those references exist** (i.e. the code already uses `docker info`, `spawn('docker'`, `docker build`), the conversion has already been done. Continue to 3c.
+**If the chosen runtime is Docker**, no conversion is needed. Continue to 4c.
 
 ### 3c. Build and test
 
-Run `./.claude/skills/setup/scripts/03-setup-container.sh --runtime <chosen>` and parse the status block.
+Run `npx tsx setup/index.ts --step container -- --runtime <chosen>` and parse the status block.
 
 **If BUILD_OK=false:** Read `logs/setup.log` tail for the build error.
-- If it's a cache issue (stale layers): run `container builder stop && container builder rm && container builder start` (Apple Container) or `docker builder prune -f` (Docker), then retry.
-- If Dockerfile syntax or missing files: diagnose from the log and fix.
-- Retry the build script after fixing.
+- Cache issue (stale layers): `docker builder prune -f` (Docker) or `container builder stop && container builder rm && container builder start` (Apple Container). Retry.
+- Dockerfile syntax or missing files: diagnose from the log and fix, then retry.
 
 **If TEST_OK=false but BUILD_OK=true:** The image built but won't run. Check logs — common cause is runtime not fully started. Wait a moment and retry the test.
 
 ## 4. Claude Authentication (No Script)
 
-If HAS_ENV=true from step 1, read `.env` and check if it already has `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. If so, confirm with user: "You already have Claude credentials configured. Want to keep them or reconfigure?" If keeping, skip to step 5.
+If HAS_ENV=true from step 2, read `.env` and check for `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`. If present, confirm with user: keep or reconfigure?
 
 AskUserQuestion: Claude subscription (Pro/Max) vs Anthropic API key?
 
-**Subscription:** Tell the user:
-1. Open another terminal and run: `claude setup-token`
-2. Copy the token it outputs
-3. Add it to the `.env` file in the project root: `CLAUDE_CODE_OAUTH_TOKEN=<token>`
-4. Let me know when done
+**Subscription:** Tell user to run `claude setup-token` in another terminal, copy the token, add `CLAUDE_CODE_OAUTH_TOKEN=<token>` to `.env`. Do NOT collect the token in chat.
 
-Do NOT ask the user to paste the token into the chat. Do NOT use AskUserQuestion to collect the token. Just tell them what to do, then wait for confirmation that they've added it to `.env`. Once confirmed, verify the `.env` file has the key.
+**API key:** Tell user to add `ANTHROPIC_API_KEY=<key>` to `.env`.
 
-**API key:** Tell the user to add `ANTHROPIC_API_KEY=<key>` to the `.env` file in the project root, then let you know when done. Once confirmed, verify the `.env` file has the key.
+## 5. Set Up Channels
 
-## 5. WhatsApp Authentication
+AskUserQuestion (multiSelect): Which messaging channels do you want to enable?
+- WhatsApp (authenticates via QR code or pairing code)
+- Telegram (authenticates via bot token from @BotFather)
+- Slack (authenticates via Slack app with Socket Mode)
+- Discord (authenticates via Discord bot token)
 
-If HAS_AUTH=true from step 1, confirm with user: "WhatsApp credentials already exist. Want to keep them or re-authenticate?" If keeping, skip to step 6.
+**Delegate to each selected channel's own skill.** Each channel skill handles its own code installation, authentication, registration, and JID resolution. This avoids duplicating channel-specific logic and ensures JIDs are always correct.
 
-AskUserQuestion: QR code in browser (recommended) vs pairing code vs QR code in terminal?
+For each selected channel, invoke its skill:
 
-- **QR browser:** Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method qr-browser` (Bash timeout: 150000ms)
-- **Pairing code:** Ask for phone number first (country code, no + or spaces, e.g. 14155551234). Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method pairing-code --phone NUMBER` (Bash timeout: 150000ms). Display the PAIRING_CODE from the status block with instructions.
-- **QR terminal:** Run `./.claude/skills/setup/scripts/04-auth-whatsapp.sh --method qr-terminal`. Tell user to run `cd PROJECT_PATH && npm run auth` in another terminal. Wait for confirmation.
+- **WhatsApp:** Invoke `/add-whatsapp`
+- **Telegram:** Invoke `/add-telegram`
+- **Slack:** Invoke `/add-slack`
+- **Discord:** Invoke `/add-discord`
 
-If AUTH_STATUS=already_authenticated → skip ahead.
+Each skill will:
+1. Install the channel code (via `apply-skill`)
+2. Collect credentials/tokens and write to `.env`
+3. Authenticate (WhatsApp QR/pairing, or verify token-based connection)
+4. Register the chat with the correct JID format
+5. Build and verify
 
-**If failed:**
-- qr_timeout → QR expired. Automatically re-run the auth script to generate a fresh QR. Tell user a new QR is ready.
-- logged_out → Delete `store/auth/` and re-run auth automatically.
-- 515 → Stream error during pairing. The auth script handles reconnection, but if it persists, re-run the auth script.
-- timeout → Auth took too long. Ask user if they scanned/entered the code, offer to retry.
+**After all channel skills complete**, continue to step 6.
 
-## 6. Configure Trigger and Channel Type
+## 6. Mount Allowlist
 
-First, determine the phone number situation. Get the bot's WhatsApp number from `store/auth/creds.json`:
-`node -e "const c=require('./store/auth/creds.json');console.log(c.me.id.split(':')[0].split('@')[0])"`
+AskUserQuestion: Agent access to external directories?
 
-AskUserQuestion: Does the bot share your personal WhatsApp number, or does it have its own dedicated phone number?
+**No:** `npx tsx setup/index.ts --step mounts -- --empty`
+**Yes:** Collect paths/permissions. `npx tsx setup/index.ts --step mounts -- --json '{"allowedRoots":[...],"blockedPatterns":[],"nonMainReadOnly":true}'`
 
-AskUserQuestion: What trigger word? (default: Andy). In group chats, messages starting with @TriggerWord go to Claude. In the main channel, no prefix needed.
+## 7. Start Service
 
-AskUserQuestion: Main channel type? (options depend on phone number setup)
+If service already running: unload first.
+- macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
+- Linux: `systemctl --user stop nanoclaw` (or `systemctl stop nanoclaw` if root)
 
-**If bot shares user's number (same phone):**
-1. Self-chat (chat with yourself) — Recommended. You message yourself and the bot responds.
-2. Solo group (just you) — A group where you're the only member. Good if you want message history separate from self-chat.
+Run `npx tsx setup/index.ts --step service` and parse the status block.
 
-**If bot has its own dedicated phone number:**
-1. DM with the bot — Recommended. You message the bot's number directly.
-2. Solo group with the bot — A group with just you and the bot, no one else.
+**If FALLBACK=wsl_no_systemd:** WSL without systemd detected. Tell user they can either enable systemd in WSL (`echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf` then restart WSL) or use the generated `start-nanoclaw.sh` wrapper.
 
-Do NOT show options that don't apply to the user's setup. For example, don't offer "DM with the bot" if the bot shares the user's number (you can't DM yourself on WhatsApp).
+**If DOCKER_GROUP_STALE=true:** The user was added to the docker group after their session started — the systemd service can't reach the Docker socket. Ask user to run these two commands:
 
-## 7. Sync and Select Group (If Group Channel)
-
-**For personal chat:** The JID is the bot's own phone number from step 6. Construct as `NUMBER@s.whatsapp.net`.
-
-**For DM with bot's dedicated number:** Ask for the bot's phone number, construct JID as `NUMBER@s.whatsapp.net`.
-
-**For group (solo or with bot):**
-1. Run `./.claude/skills/setup/scripts/05-sync-groups.sh` (Bash timeout: 60000ms)
-2. **If BUILD=failed:** Read `logs/setup.log`, fix the TypeScript error, re-run.
-3. **If GROUPS_IN_DB=0:** Check `logs/setup.log` for the sync output. Common causes: WhatsApp auth expired (re-run step 5), connection timeout (re-run sync script with longer timeout).
-4. Run `./.claude/skills/setup/scripts/05b-list-groups.sh` to get groups (pipe-separated JID|name lines). Do NOT display the output to the user.
-5. Pick the most likely candidates (e.g. groups with the trigger word or "NanoClaw" in the name, small/solo groups) and present them as AskUserQuestion options — show names only, not JIDs. Include an "Other" option if their group isn't listed. If they pick Other, search by name in the DB or re-run with a higher limit.
-
-## 8. Register Channel
-
-Run `./.claude/skills/setup/scripts/06-register-channel.sh` with args:
-- `--jid "JID"` — from step 7
-- `--name "main"` — always "main" for the first channel
-- `--trigger "@TriggerWord"` — from step 6
-- `--folder "main"` — always "main" for the first channel
-- `--no-trigger-required` — if personal chat, DM, or solo group
-- `--assistant-name "Name"` — if trigger word differs from "Andy"
-
-## 9. Mount Allowlist
-
-AskUserQuestion: Want the agent to access directories outside the NanoClaw project? (Git repos, project folders, documents, etc.)
-
-**If no:** Run `./.claude/skills/setup/scripts/07-configure-mounts.sh --empty`
-
-**If yes:** Collect directory paths and permissions (read-write vs read-only). Ask about non-main group read-only restriction (recommended: yes). Build the JSON and pipe it to the script:
-
-`echo '{"allowedRoots":[...],"blockedPatterns":[],"nonMainReadOnly":true}' | ./.claude/skills/setup/scripts/07-configure-mounts.sh`
-
-Tell user how to grant a group access: add `containerConfig.additionalMounts` to their entry in `data/registered_groups.json`.
-
-## 10. Start Service
-
-If the service is already running (check `launchctl list | grep nanoclaw` on macOS), unload it first: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` — then proceed with a clean install.
-
-Run `./.claude/skills/setup/scripts/08-setup-service.sh` and parse the status block.
+1. Immediate fix: `sudo setfacl -m u:$(whoami):rw /var/run/docker.sock`
+2. Persistent fix (re-applies after every Docker restart):
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/socket-acl.conf << 'EOF'
+[Service]
+ExecStartPost=/usr/bin/setfacl -m u:USERNAME:rw /var/run/docker.sock
+EOF
+sudo systemctl daemon-reload
+```
+Replace `USERNAME` with the actual username (from `whoami`). Run the two `sudo` commands separately — the `tee` heredoc first, then `daemon-reload`. After user confirms setfacl ran, re-run the service step.
 
 **If SERVICE_LOADED=false:**
 - Read `logs/setup.log` for the error.
-- Common fix: plist already loaded with different path. Unload the old one first, then re-run.
-- On macOS: check `launchctl list | grep nanoclaw` to see if it's loaded with an error status. If the PID column is `-` and the status column is non-zero, the service is crashing. Read `logs/nanoclaw.error.log` for the crash reason and fix it (common: wrong Node path, missing .env, missing auth).
-- On Linux: check `systemctl --user status nanoclaw` for the error and fix accordingly.
-- Re-run the setup-service script after fixing.
+- macOS: check `launchctl list | grep nanoclaw`. If PID=`-` and status non-zero, read `logs/nanoclaw.error.log`.
+- Linux: check `systemctl --user status nanoclaw`.
+- Re-run the service step after fixing.
 
-## 11. Verify
+## 8. Verify
 
-Run `./.claude/skills/setup/scripts/09-verify.sh` and parse the status block.
+Run `npx tsx setup/index.ts --step verify` and parse the status block.
 
-**If STATUS=failed, fix each failing component:**
-- SERVICE=stopped → run `npm run build` first, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux). Re-check.
-- SERVICE=not_found → re-run step 10.
-- CREDENTIALS=missing → re-run step 4.
-- WHATSAPP_AUTH=not_found → re-run step 5.
-- REGISTERED_GROUPS=0 → re-run steps 7-8.
-- MOUNT_ALLOWLIST=missing → run `./.claude/skills/setup/scripts/07-configure-mounts.sh --empty` to create a default.
+**If STATUS=failed, fix each:**
+- SERVICE=stopped → `npm run build`, then restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux) or `bash start-nanoclaw.sh` (WSL nohup)
+- SERVICE=not_found → re-run step 7
+- CREDENTIALS=missing → re-run step 4
+- CHANNEL_AUTH shows `not_found` for any channel → re-invoke that channel's skill (e.g. `/add-telegram`)
+- REGISTERED_GROUPS=0 → re-invoke the channel skills from step 5
+- MOUNT_ALLOWLIST=missing → `npx tsx setup/index.ts --step mounts -- --empty`
 
-After fixing, re-run `09-verify.sh` to confirm everything passes.
-
-Tell user to test: send a message in their registered chat (with or without trigger depending on channel type).
-
-Show the log tail command: `tail -f logs/nanoclaw.log`
+Tell user to test: send a message in their registered chat. Show: `tail -f logs/nanoclaw.log`
 
 ## Troubleshooting
 
-**Service not starting:** Check `logs/nanoclaw.error.log`. Common causes: wrong Node path in plist (re-run step 10), missing `.env` (re-run step 4), missing WhatsApp auth (re-run step 5).
+**Service not starting:** Check `logs/nanoclaw.error.log`. Common: wrong Node path (re-run step 7), missing `.env` (step 4), missing channel credentials (re-invoke channel skill).
 
-**Container agent fails ("Claude Code process exited with code 1"):** Ensure Docker is running — start it: `open -a Docker` (macOS) or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
+**Container agent fails ("Claude Code process exited with code 1"):** Ensure the container runtime is running — `open -a Docker` (macOS Docker), `container system start` (Apple Container), or `sudo systemctl start docker` (Linux). Check container logs in `groups/main/logs/container-*.log`.
 
-**No response to messages:** Verify the trigger pattern matches. Main channel and personal/solo chats don't need a prefix. Check the registered JID in the database: `sqlite3 store/messages.db "SELECT * FROM registered_groups"`. Check `logs/nanoclaw.log`.
+**No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `npx tsx setup/index.ts --step verify`. Check `logs/nanoclaw.log`.
 
-**Messages sent but not received (DMs):** WhatsApp may use LID (Linked Identity) JIDs. Check logs for LID translation. Verify the registered JID has no device suffix (should be `number@s.whatsapp.net`, not `number:0@s.whatsapp.net`).
+**Channel not connecting:** Verify the channel's credentials are set in `.env`. Channels auto-enable when their credentials are present. For WhatsApp: check `store/auth/creds.json` exists. For token-based channels: check token values in `.env`. Restart the service after any `.env` change.
 
-**WhatsApp disconnected:** Run `npm run auth` to re-authenticate, then `npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw`.
-
-**Unload service:** `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
+**Unload service:** macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist` | Linux: `systemctl --user stop nanoclaw`

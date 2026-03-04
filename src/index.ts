@@ -4,14 +4,17 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
-  MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_ONLY,
   TRIGGER_PATTERN,
 } from './config.js';
-import { WhatsAppChannel } from './channels/whatsapp.js';
 import { TelegramChannel } from './channels/telegram.js';
+import './channels/index.js';
+import {
+  getChannelFactory,
+  getRegisteredChannelNames,
+} from './channels/registry.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -42,6 +45,12 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  isSenderAllowed,
+  isTriggerAllowed,
+  loadSenderAllowlist,
+  shouldDropMessage,
+} from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -57,8 +66,6 @@ let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
 const pendingImageData = new Map<string, { base64: string; mimeType: string }>();
-
-let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -147,7 +154,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
-  const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+  const isMainGroup = group.isMain === true;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(
@@ -160,8 +167,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const hasTrigger = missedMessages.some((m) =>
-      TRIGGER_PATTERN.test(m.content.trim()),
+    const allowlistCfg = loadSenderAllowlist();
+    const hasTrigger = missedMessages.some(
+      (m) =>
+        TRIGGER_PATTERN.test(m.content.trim()) &&
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
   }
@@ -273,7 +283,7 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
   imageData?: { base64: string; mimeType: string },
 ): Promise<'success' | 'error'> {
-  const isMain = group.folder === MAIN_GROUP_FOLDER;
+  const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
@@ -304,12 +314,12 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
-        await onOutput(output);
+      if (output.newSessionId) {
+        sessions[group.folder] = output.newSessionId;
+        setSession(group.folder, output.newSessionId);
       }
+      await onOutput(output);
+    }
     : undefined;
 
   try {
@@ -396,15 +406,19 @@ async function startMessageLoop(): Promise<void> {
             continue;
           }
 
-          const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+          const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const hasTrigger = groupMessages.some((m) =>
-              TRIGGER_PATTERN.test(m.content.trim()),
+            const allowlistCfg = loadSenderAllowlist();
+            const hasTrigger = groupMessages.some(
+              (m) =>
+                TRIGGER_PATTERN.test(m.content.trim()) &&
+                (m.is_from_me ||
+                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
           }
@@ -504,12 +518,33 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
-    onMessage: (_chatJid: string, msg: NewMessage) => {
+    onMessage: (chatJid: string, msg: NewMessage) => {
       if (msg.image_data) {
         pendingImageData.set(msg.id, {
           base64: msg.image_data,
           mimeType: msg.image_mime_type ?? 'image/jpeg',
         });
+      }
+
+      // Sender allowlist drop mode: discard messages from denied senders before storing
+      if (
+        !msg.is_from_me &&
+        !msg.is_bot_message &&
+        registeredGroups[chatJid]
+      ) {
+        const cfg = loadSenderAllowlist();
+        if (
+          shouldDropMessage(chatJid, cfg) &&
+          !isSenderAllowed(chatJid, msg.sender, cfg)
+        ) {
+          if (cfg.logDenied) {
+            logger.debug(
+              { chatJid, sender: msg.sender },
+              'sender-allowlist: dropping message (drop mode)',
+            );
+          }
+          return;
+        }
       }
       storeMessage(msg);
     },
@@ -523,17 +558,32 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
-  // Create and connect channels
-  if (!TELEGRAM_ONLY) {
-    whatsapp = new WhatsAppChannel(channelOpts);
-    channels.push(whatsapp);
-    await whatsapp.connect();
-  }
-
+  // Create and connect core channels with custom logic
   if (TELEGRAM_BOT_TOKEN) {
     const telegram = new TelegramChannel(TELEGRAM_BOT_TOKEN, channelOpts);
     channels.push(telegram);
     await telegram.connect();
+  }
+
+  // Create and connect other registered channels from skills
+  for (const channelName of getRegisteredChannelNames()) {
+    if (channelName === 'telegram') continue; // Handled specially above
+    if (TELEGRAM_ONLY && channelName === 'whatsapp') continue;
+    const factory = getChannelFactory(channelName)!;
+    const channel = factory(channelOpts);
+    if (!channel) {
+      logger.warn(
+        { channel: channelName },
+        'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
+      );
+      continue;
+    }
+    channels.push(channel);
+    await channel.connect();
+  }
+  if (channels.length === 0) {
+    logger.fatal('No channels connected');
+    process.exit(1);
   }
 
   // Start subsystems (independently of connection handler)
@@ -581,8 +631,13 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
-    syncGroupMetadata: (force) =>
-      whatsapp?.syncGroupMetadata(force) ?? Promise.resolve(),
+    syncGroups: async (force: boolean) => {
+      await Promise.all(
+        channels
+          .filter((ch) => (ch as any).syncGroups)
+          .map((ch) => (ch as any).syncGroups!(force)),
+      );
+    },
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
@@ -599,7 +654,7 @@ async function main(): Promise<void> {
 const isDirectRun =
   process.argv[1] &&
   new URL(import.meta.url).pathname ===
-    new URL(`file://${process.argv[1]}`).pathname;
+  new URL(`file://${process.argv[1]}`).pathname;
 
 if (isDirectRun) {
   main().catch((err) => {

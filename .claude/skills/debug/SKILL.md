@@ -14,7 +14,7 @@ Host (macOS/Linux)                    Container (Docker)
 ─────────────────────────────────────────────────────────────
 src/container-runner.ts               container/agent-runner/
     │                                      │
-    │ spawns Docker container              │ runs Claude Agent SDK
+    │ spawns container                      │ runs Claude Agent SDK
     │ with volume mounts                   │ with MCP servers
     │                                      │
     ├── data/env/env ──────────────> /workspace/env-dir/env
@@ -43,9 +43,11 @@ Set `LOG_LEVEL=debug` for verbose output:
 # For development
 LOG_LEVEL=debug npm run dev
 
-# For launchd service, add to plist EnvironmentVariables:
+# For launchd service (macOS), add to plist EnvironmentVariables:
 <key>LOG_LEVEL</key>
 <string>debug</string>
+# For systemd service (Linux), add to unit [Service] section:
+# Environment=LOG_LEVEL=debug
 ```
 
 Debug level shows:
@@ -80,7 +82,9 @@ cat .env  # Should show one of:
 
 ### 2. Environment Variables Not Passing
 
-The system extracts only authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) from `.env` and mounts them for sourcing inside the container. Other env vars are not exposed.
+**Runtime note:** Environment variables passed via `-e` may be lost when using `-i` (interactive/piped stdin).
+
+**Workaround:** The system extracts only authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) from `.env` and mounts them for sourcing inside the container. Other env vars are not exposed.
 
 To verify env vars are reaching the container:
 ```bash
@@ -91,6 +95,17 @@ echo '{}' | docker run -i \
 ```
 
 ### 3. Mount Issues
+
+**Container mount notes:**
+- Docker supports both `-v` and `--mount` syntax
+- Use `:ro` suffix for readonly mounts:
+  ```bash
+  # Readonly
+  -v /path:/container/path:ro
+
+  # Read-write
+  -v /path:/container/path
+  ```
 
 To check what's mounted inside a container:
 ```bash
@@ -313,7 +328,7 @@ echo -e "\n1. Authentication configured?"
 echo -e "\n2. Env file copied for container?"
 [ -f data/env/env ] && echo "OK" || echo "MISSING - will be created on first run"
 
-echo -e "\n3. Docker running?"
+echo -e "\n3. Container runtime running?"
 docker info &>/dev/null && echo "OK" || echo "NOT RUNNING - start Docker Desktop (macOS) or sudo systemctl start docker (Linux)"
 
 echo -e "\n4. Container image exists?"
