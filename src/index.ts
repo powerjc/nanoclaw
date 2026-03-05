@@ -52,7 +52,6 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { tryOllamaRoute } from './llm-router.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -216,16 +215,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, true);
 
-  // Try Ollama for simple/privacy queries — skip spawning a container
-  // Skip Ollama entirely if the batch contains an image (Ollama has no vision)
-  const ollamaResponse = imageData
-    ? null
-    : await tryOllamaRoute(missedMessages, group.name);
-  if (ollamaResponse !== null) {
-    await channel.setTyping?.(chatJid, false);
-    await channel.sendMessage(chatJid, ollamaResponse);
-    return true;
-  }
   let hadError = false;
   let outputSentToUser = false;
 
@@ -328,12 +317,12 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
-        await onOutput(output);
+      if (output.newSessionId) {
+        sessions[group.folder] = output.newSessionId;
+        setSession(group.folder, output.newSessionId);
       }
+      await onOutput(output);
+    }
     : undefined;
 
   try {
@@ -448,20 +437,7 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend);
 
-          // Try Ollama before piping to container or starting a new one
-          // Skip if any message in the batch has pending image data (Ollama has no vision)
-          const hasImage = messagesToSend.some((m) =>
-            pendingImageData.has(m.id),
-          );
-          const ollamaResponse = hasImage
-            ? null
-            : await tryOllamaRoute(messagesToSend, group.name);
-          if (ollamaResponse !== null) {
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            await channel.sendMessage(chatJid, ollamaResponse);
-          } else if (queue.sendMessage(chatJid, formatted)) {
+          if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
@@ -666,7 +642,7 @@ async function main(): Promise<void> {
 const isDirectRun =
   process.argv[1] &&
   new URL(import.meta.url).pathname ===
-    new URL(`file://${process.argv[1]}`).pathname;
+  new URL(`file://${process.argv[1]}`).pathname;
 
 if (isDirectRun) {
   main().catch((err) => {
