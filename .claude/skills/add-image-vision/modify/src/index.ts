@@ -5,8 +5,6 @@ import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
-  TELEGRAM_ONLY,
-  TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
 import './channels/index.js';
@@ -31,10 +29,8 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
-  getRegisteredGroup,
   getRouterState,
   initDatabase,
-  resetRunningTasks,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -53,6 +49,7 @@ import {
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
+import { parseImageReferences } from './image.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
@@ -64,10 +61,6 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
-const pendingImageData = new Map<
-  string,
-  { base64: string; mimeType: string }
->();
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -178,12 +171,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
-
-  // Capture any pending image data for messages in this batch
-  const imgMsg = missedMessages.find((m) => pendingImageData.has(m.id));
-  const imageData = imgMsg ? pendingImageData.get(imgMsg.id) : undefined;
-  if (imgMsg && imageData) pendingImageData.delete(imgMsg.id);
+  const prompt = formatMessages(missedMessages);
+  const imageAttachments = parseImageReferences(missedMessages);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -193,11 +182,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    {
-      group: group.name,
-      messageCount: missedMessages.length,
-      hasImage: !!imageData,
-    },
+    { group: group.name, messageCount: missedMessages.length },
     'Processing messages',
   );
 
@@ -216,44 +201,35 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
-
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(
-    group,
-    prompt,
-    chatJid,
-    async (result) => {
-      // Streaming output callback — called for each agent result
-      if (result.result) {
-        const raw =
-          typeof result.result === 'string'
-            ? result.result
-            : JSON.stringify(result.result);
-        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-        logger.info(
-          { group: group.name },
-          `Agent output: ${raw.slice(0, 200)}`,
-        );
-        if (text) {
-          await channel.sendMessage(chatJid, text);
-          outputSentToUser = true;
-        }
-        // Only reset idle timer on actual results, not session-update markers (result: null)
-        resetIdleTimer();
+  const output = await runAgent(group, prompt, chatJid, imageAttachments, async (result) => {
+    // Streaming output callback — called for each agent result
+    if (result.result) {
+      const raw =
+        typeof result.result === 'string'
+          ? result.result
+          : JSON.stringify(result.result);
+      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      if (text) {
+        await channel.sendMessage(chatJid, text);
+        outputSentToUser = true;
       }
+      // Only reset idle timer on actual results, not session-update markers (result: null)
+      resetIdleTimer();
+    }
 
-      if (result.status === 'success') {
-        queue.notifyIdle(chatJid);
-      }
-      if (result.status === 'error') {
-        hadError = true;
-      }
-    },
-    imageData,
-  );
+    if (result.status === 'success') {
+      queue.notifyIdle(chatJid);
+    }
+
+    if (result.status === 'error') {
+      hadError = true;
+    }
+  });
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -285,8 +261,8 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  imageAttachments: Array<{ relativePath: string; mediaType: string }>,
   onOutput?: (output: ContainerOutput) => Promise<void>,
-  imageData?: { base64: string; mimeType: string },
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -337,8 +313,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
-        imageData: imageData?.base64,
-        imageMimeType: imageData?.mimeType,
+        ...(imageAttachments.length > 0 && { imageAttachments }),
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -437,7 +412,7 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
+          const formatted = formatMessages(messagesToSend);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
@@ -493,13 +468,6 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
-  const resetCount = resetRunningTasks();
-  if (resetCount > 0) {
-    logger.warn(
-      { count: resetCount },
-      'Reset running tasks interrupted by previous shutdown',
-    );
-  }
   loadState();
 
   // Graceful shutdown handlers
@@ -515,13 +483,6 @@ async function main(): Promise<void> {
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
-      if (msg.image_data) {
-        pendingImageData.set(msg.id, {
-          base64: msg.image_data,
-          mimeType: msg.image_mime_type ?? 'image/jpeg',
-        });
-      }
-
       // Sender allowlist drop mode: discard messages from denied senders before storing
       if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
         const cfg = loadSenderAllowlist();
@@ -550,11 +511,10 @@ async function main(): Promise<void> {
     registeredGroups: () => registeredGroups,
   };
 
-  // Create and connect core channels with custom logic
-
-  // Create and connect other registered channels from skills
+  // Create and connect all registered channels.
+  // Each channel self-registers via the barrel import above.
+  // Factories return null when credentials are missing, so unconfigured channels are skipped.
   for (const channelName of getRegisteredChannelNames()) {
-    if (TELEGRAM_ONLY && channelName === 'whatsapp') continue;
     const factory = getChannelFactory(channelName)!;
     const channel = factory(channelOpts);
     if (!channel) {
@@ -595,37 +555,13 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
-    sendFile: (jid, filePath, caption) => {
-      const channel = findChannel(channels, jid);
-      if (!channel?.sendFile) {
-        logger.warn({ jid }, 'Channel does not support sendFile');
-        return Promise.resolve();
-      }
-      return channel.sendFile(jid, filePath, caption);
-    },
-    refreshTasksSnapshot: (groupFolder, isMain) => {
-      const tasks = getAllTasks();
-      writeTasksSnapshot(
-        groupFolder,
-        isMain,
-        tasks.map((t) => ({
-          id: t.id,
-          groupFolder: t.group_folder,
-          prompt: t.prompt,
-          schedule_type: t.schedule_type,
-          schedule_value: t.schedule_value,
-          status: t.status,
-          next_run: t.next_run,
-        })),
-      );
-    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
       await Promise.all(
         channels
-          .filter((ch) => (ch as any).syncGroups)
-          .map((ch) => (ch as any).syncGroups!(force)),
+          .filter((ch) => ch.syncGroups)
+          .map((ch) => ch.syncGroups!(force)),
       );
     },
     getAvailableGroups,
