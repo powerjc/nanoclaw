@@ -1,0 +1,4 @@
+# Skill templates: always take upstream on conflict.
+# These are installation templates — actual customizations live in src/ and container/.
+# The merge driver is registered in .git/config (run setup.sh on a new machine to restore it).
+.claude/skills/** merge=take-theirs

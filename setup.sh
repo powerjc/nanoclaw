@@ -88,6 +88,10 @@ install_deps() {
     return
   fi
 
+  # Register git merge driver for skill templates (takes upstream on conflict)
+  git config merge.take-theirs.name "Always take upstream version" 2>/dev/null || true
+  git config merge.take-theirs.driver "cp %B %A" 2>/dev/null || true
+
   # Verify native module (better-sqlite3)
   log "Verifying native modules"
   if node -e "require('better-sqlite3')" >> "$LOG_FILE" 2>&1; then
