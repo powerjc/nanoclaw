@@ -16,7 +16,7 @@ import {
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { readEnvFile } from './env.js';
+import { readAllEnvFile, readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -247,27 +247,38 @@ function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
+  // Skip only when running as the container's node user (uid 1000) — the image
+  // already defaults to that user so no override is needed.
+  // When running as root (uid 0, e.g. a system service), pass --user 0:0 so
+  // the container can write to the root-owned bind-mounted directories.
+  // Skip when getuid is unavailable (native Windows without WSL).
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
+  if (hostUid != null && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
 
-  // Pass MCP config vars as Docker env vars so they propagate naturally through
-  // the process tree (container → Claude Code CLI → MCP server children).
-  // Auth tokens (OAUTH, ANTHROPIC_API_KEY) go via the stdin secrets pipeline instead.
-  const mcpEnv = readEnvFile([
-    'HA_URL',
-    'HA_TOKEN',
-    'SONARR_URL',
-    'SONARR_API_KEY',
-    'RADARR_URL',
-    'RADARR_API_KEY',
+  // Forward all .env vars to the container as env vars so integrations work
+  // without requiring code changes when new services are added.
+  // Exclusions:
+  //   - stdin secrets (OAUTH/API keys — forwarded securely via stdin instead)
+  //   - host-only config (Telegram, assistant name — not relevant inside container)
+  const STDIN_SECRETS = new Set([
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
   ]);
-  for (const [key, value] of Object.entries(mcpEnv)) {
+  const HOST_ONLY = new Set([
+    'TELEGRAM_BOT_TOKEN',
+    'TELEGRAM_ONLY',
+    'ASSISTANT_NAME',
+    'ASSISTANT_HAS_OWN_NUMBER',
+  ]);
+  const allEnv = readAllEnvFile();
+  for (const [key, value] of Object.entries(allEnv)) {
+    if (STDIN_SECRETS.has(key) || HOST_ONLY.has(key)) continue;
     args.push('-e', `${key}=${value}`);
   }
   for (const mount of mounts) {

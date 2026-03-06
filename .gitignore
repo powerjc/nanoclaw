@@ -39,3 +39,5 @@ llm-routing.json
 .nanoclaw/
 
 agents-sdk-docs
+
+apply-error.log
