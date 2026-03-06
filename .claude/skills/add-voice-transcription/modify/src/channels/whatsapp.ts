@@ -18,17 +18,14 @@ import {
 } from '../config.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
-<<<<<<< HEAD:src/channels/whatsapp.ts
+import { isVoiceMessage, transcribeAudioMessage } from '../transcription.js';
 import {
   Channel,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
 } from '../types.js';
-=======
-import { isVoiceMessage, transcribeAudioMessage } from '../transcription.js';
-import { Channel, OnInboundMessage, OnChatMetadata, RegisteredGroup } from '../types.js';
->>>>>>> upstream/main:.claude/skills/add-voice-transcription/modify/src/channels/whatsapp.ts
+import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -67,14 +64,10 @@ export class WhatsAppChannel implements Channel {
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
-<<<<<<< HEAD:src/channels/whatsapp.ts
       logger.warn(
         { err },
         'Failed to fetch latest WA Web version, using default',
       );
-=======
-      logger.warn({ err }, 'Failed to fetch latest WA Web version, using default');
->>>>>>> upstream/main:.claude/skills/add-voice-transcription/modify/src/channels/whatsapp.ts
       return { version: undefined };
     });
     this.sock = makeWASocket({
@@ -103,13 +96,9 @@ export class WhatsAppChannel implements Channel {
 
       if (connection === 'close') {
         this.connected = false;
-<<<<<<< HEAD:src/channels/whatsapp.ts
         const reason = (
           lastDisconnect?.error as { output?: { statusCode?: number } }
         )?.output?.statusCode;
-=======
-        const reason = (lastDisconnect?.error as { output?: { statusCode?: number } })?.output?.statusCode;
->>>>>>> upstream/main:.claude/skills/add-voice-transcription/modify/src/channels/whatsapp.ts
         const shouldReconnect = reason !== DisconnectReason.loggedOut;
         logger.info(
           {
@@ -216,12 +205,8 @@ export class WhatsAppChannel implements Channel {
             '';
 
           // Skip protocol messages with no text content (encryption keys, read receipts, etc.)
-<<<<<<< HEAD:src/channels/whatsapp.ts
-          if (!content) continue;
-=======
           // but allow voice messages through for transcription
           if (!content && !isVoiceMessage(msg)) continue;
->>>>>>> upstream/main:.claude/skills/add-voice-transcription/modify/src/channels/whatsapp.ts
 
           const sender = msg.key.participant || msg.key.remoteJid || '';
           const senderName = msg.pushName || sender.split('@')[0];
@@ -411,3 +396,12 @@ export class WhatsAppChannel implements Channel {
     }
   }
 }
+
+registerChannel('whatsapp', (opts: ChannelOpts) => {
+  const authDir = path.join(STORE_DIR, 'auth');
+  if (!fs.existsSync(path.join(authDir, 'creds.json'))) {
+    logger.warn('WhatsApp: credentials not found. Run /add-whatsapp to authenticate.');
+    return null;
+  }
+  return new WhatsAppChannel(opts);
+});
