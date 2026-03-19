@@ -54,7 +54,7 @@ beforeEach(() => {
   deps = {
     sendMessage: async () => {},
     sendFile: async () => {},
-    refreshTasksSnapshot: () => {},
+    onTasksChanged: () => {},
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {
       groups[jid] = group;
@@ -64,7 +64,6 @@ beforeEach(() => {
     syncGroups: async () => {},
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
-    onTasksChanged: () => {},
   };
 });
 
