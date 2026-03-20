@@ -154,29 +154,52 @@ Folder naming convention — channel prefix with underscore separator:
 
 #### Adding Additional Directories for a Group
 
-Groups can have extra directories mounted. Add `containerConfig` to their entry:
+Pass `containerConfig` in the `register_group` IPC call, or use `update_group` to set it after registration (see below).
 
 ```json
 {
-  "1234567890@g.us": {
-    "name": "Dev Team",
-    "folder": "dev-team",
-    "trigger": "@Andy",
-    "added_at": "2026-01-31T12:00:00Z",
-    "containerConfig": {
-      "additionalMounts": [
-        {
-          "hostPath": "~/projects/webapp",
-          "containerPath": "webapp",
-          "readonly": false
-        }
-      ]
-    }
+  "containerConfig": {
+    "additionalMounts": [
+      { "hostPath": "~/projects/webapp", "containerPath": "webapp", "readonly": false }
+    ]
   }
 }
 ```
 
 The directory will appear at `/workspace/extra/webapp` in that group's container.
+
+Overlapping mounts work — mount a parent readonly then override a subdirectory readwrite:
+
+```json
+{
+  "additionalMounts": [
+    { "hostPath": "/mnt/obsidian", "containerPath": "obsidian", "readonly": true },
+    { "hostPath": "/mnt/obsidian/Jarvis", "containerPath": "obsidian/Jarvis", "readonly": false }
+  ]
+}
+```
+
+### Updating Group Config at Runtime
+
+Use `update_group` to change `requiresTrigger` or `containerConfig` for any registered group without restarting. Changes take effect immediately.
+
+```bash
+echo '{
+  "type": "update_group",
+  "jid": "tg:-5166476122",
+  "requiresTrigger": false,
+  "containerConfig": {
+    "additionalMounts": [
+      { "hostPath": "/mnt/obsidian", "containerPath": "obsidian", "readonly": true },
+      { "hostPath": "/mnt/obsidian/Jarvis", "containerPath": "obsidian/Jarvis", "readonly": false }
+    ]
+  }
+}' > /workspace/ipc/tasks/update_group_$(date +%s).json
+```
+
+Both `requiresTrigger` and `containerConfig` are optional — omit whichever you don't need to change.
+
+Mounts are validated against the host allowlist at container spawn time. Allowed roots are configured in `~/.config/nanoclaw/mount-allowlist.json` on the host.
 
 #### Sender Allowlist
 
@@ -211,14 +234,18 @@ Notes:
 
 ### Removing a Group
 
-1. Read `/workspace/project/data/registered_groups.json`
-2. Remove the entry for that group
-3. Write the updated JSON back
-4. The group folder and its files remain (don't delete them)
+```bash
+sqlite3 /workspace/project/store/messages.db "DELETE FROM registered_groups WHERE jid = '<jid>';"
+```
+
+The group folder and its files remain — don't delete them.
 
 ### Listing Groups
 
-Read `/workspace/project/data/registered_groups.json` and format it nicely.
+```bash
+sqlite3 /workspace/project/store/messages.db \
+  "SELECT jid, name, folder, requires_trigger, container_config FROM registered_groups;"
+```
 
 ---
 
@@ -251,4 +278,4 @@ The task will run in that group's context with access to their files and memory.
 @./integrations/mealie.md
 @./integrations/media-management.md
 @./integrations/paperless.md
-@./integrations/ssh.md
+@./extra/jarvis-drop/integrations/ssh/ssh.md
