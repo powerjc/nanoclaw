@@ -637,7 +637,9 @@ export function patchRegisteredGroup(
 
   values.push(jid);
   const result = db
-    .prepare(`UPDATE registered_groups SET ${setParts.join(', ')} WHERE jid = ?`)
+    .prepare(
+      `UPDATE registered_groups SET ${setParts.join(', ')} WHERE jid = ?`,
+    )
     .run(...values);
   return result.changes > 0;
 }

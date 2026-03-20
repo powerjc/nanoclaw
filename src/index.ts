@@ -61,7 +61,12 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Channel, ContainerConfig, NewMessage, RegisteredGroup } from './types.js';
+import {
+  Channel,
+  ContainerConfig,
+  NewMessage,
+  RegisteredGroup,
+} from './types.js';
 import { logger } from './logger.js';
 
 // Re-export for backwards compatibility during refactor
