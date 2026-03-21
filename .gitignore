@@ -22,8 +22,6 @@ groups/global/*
 *.keys.json
 .env
 
-# Local config (contains environment-specific details like private IPs)
-llm-routing.json
 
 # Temp files
 .tmp-*
