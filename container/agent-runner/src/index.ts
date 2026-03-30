@@ -452,6 +452,7 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__gmail__*',
         'mcp__sonarr_radarr__*',
         'mcp__ha_shopping_list__*'
       ],
@@ -469,6 +470,7 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        gmail: { command: 'npx', args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'] },
         sonarr_radarr: {
           command: 'node',
           args: [path.join(__dirname, 'sonarr-radarr-mcp.js')],

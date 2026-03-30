@@ -191,6 +191,17 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Gmail credentials (read-write so MCP can refresh OAuth tokens)
+  const homeDir = process.env.HOME || os.homedir();
+  const gmailDir = path.join(homeDir, '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false,
+    });
+  }
+
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
