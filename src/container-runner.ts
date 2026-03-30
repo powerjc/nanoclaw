@@ -100,6 +100,21 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
+
+    // Mount each group's CLAUDE.md read-write so the main agent can update
+    // per-group memories. Mounted under /workspace/groups/{folder}/CLAUDE.md
+    // for a consistent view across all groups.
+    if (fs.existsSync(GROUPS_DIR)) {
+      for (const folder of fs.readdirSync(GROUPS_DIR)) {
+        const claudeMdPath = path.join(GROUPS_DIR, folder, 'CLAUDE.md');
+        if (!fs.existsSync(claudeMdPath)) continue;
+        mounts.push({
+          hostPath: claudeMdPath,
+          containerPath: `/workspace/groups/${folder}/CLAUDE.md`,
+          readonly: false,
+        });
+      }
+    }
   } else {
     // Other groups only get their own folder
     mounts.push({

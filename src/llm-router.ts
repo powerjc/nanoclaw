@@ -34,7 +34,12 @@ let cachedConfig: RoutingConfig | null = null;
 
 function loadConfig(): RoutingConfig | null {
   if (cachedConfig) return cachedConfig;
-  const configPath = path.join(process.env.HOME || '/root', '.config', 'nanoclaw', 'llm-routing.json');
+  const configPath = path.join(
+    process.env.HOME || '/root',
+    '.config',
+    'nanoclaw',
+    'llm-routing.json',
+  );
   try {
     const raw = fs.readFileSync(configPath, 'utf-8');
     cachedConfig = JSON.parse(raw) as RoutingConfig;
