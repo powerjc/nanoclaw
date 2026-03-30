@@ -64,6 +64,7 @@ export interface ScheduledTask {
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
+  model?: string; // e.g. 'claude-haiku-4-5-20251001'; null/undefined = default
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

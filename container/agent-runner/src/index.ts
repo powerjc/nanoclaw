@@ -52,6 +52,7 @@ interface ContainerInput {
   assistantName?: string;
   imageData?: string;
   imageMimeType?: string;
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -438,6 +439,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
+      model: containerInput.model,
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,

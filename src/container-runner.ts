@@ -47,6 +47,7 @@ export interface ContainerInput {
   assistantName?: string;
   imageData?: string; // base64 JPEG (optional)
   imageMimeType?: string;
+  model?: string; // e.g. 'claude-haiku-4-5-20251001'; undefined = SDK default
 }
 
 export interface ContainerOutput {
@@ -742,6 +743,7 @@ export function writeTasksSnapshot(
     schedule_value: string;
     status: string;
     next_run: string | null;
+    model?: string;
   }>,
 ): void {
   // Write filtered tasks to the group's IPC directory

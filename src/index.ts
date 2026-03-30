@@ -78,6 +78,45 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
 
+// --- Model override (main group only) ---
+const MODEL_ALIASES: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-6',
+};
+
+let modelOverride: string | undefined;
+let modelOverrideExpiry: ReturnType<typeof setTimeout> | undefined;
+
+function resolveModelAlias(alias: string): string | undefined {
+  return MODEL_ALIASES[alias.toLowerCase()];
+}
+
+function setMainModelOverride(model: string, durationMs?: number): void {
+  if (modelOverrideExpiry) clearTimeout(modelOverrideExpiry);
+  modelOverride = model;
+  if (durationMs) {
+    modelOverrideExpiry = setTimeout(() => {
+      modelOverride = undefined;
+      modelOverrideExpiry = undefined;
+      logger.info({ model }, 'Model override expired');
+    }, durationMs);
+  }
+}
+
+function clearMainModelOverride(): void {
+  if (modelOverrideExpiry) clearTimeout(modelOverrideExpiry);
+  modelOverride = undefined;
+  modelOverrideExpiry = undefined;
+}
+
+function parseDurationMs(s: string): number | undefined {
+  const m = s.match(/^(\d+)(h|m)$/i);
+  if (!m) return undefined;
+  const n = parseInt(m[1], 10);
+  return m[2].toLowerCase() === 'h' ? n * 3_600_000 : n * 60_000;
+}
+
 const pendingImageData = new Map<
   string,
   { base64: string; mimeType: string }
@@ -216,6 +255,54 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const imageData = imgMsg ? pendingImageData.get(imgMsg.id) : undefined;
   if (imgMsg && imageData) pendingImageData.delete(imgMsg.id);
 
+  // --- Model override parsing (main group only) ---
+  let invokeModel: string | undefined;
+  if (isMainGroup) {
+    const lastMsg = missedMessages[missedMessages.length - 1];
+    const text = (lastMsg?.content ?? '').trim();
+
+    // !model <alias> [duration] — persistent override or reset
+    const persistMatch = text.match(/^!model\s+(\S+)(?:\s+(\d+[hm]))?$/i);
+    if (persistMatch) {
+      const alias = persistMatch[1].toLowerCase();
+      const durationStr = persistMatch[2];
+      // Advance cursor and send confirmation without running the agent
+      lastAgentTimestamp[chatJid] = lastMsg.timestamp;
+      saveState();
+      if (alias === 'reset' || alias === 'default') {
+        clearMainModelOverride();
+        await channel.sendMessage(chatJid, '✓ Model reset to default.');
+      } else {
+        const resolved = resolveModelAlias(alias);
+        if (resolved) {
+          const durationMs = durationStr
+            ? parseDurationMs(durationStr)
+            : undefined;
+          setMainModelOverride(resolved, durationMs);
+          const suffix = durationStr ? ` for ${durationStr}` : ' until reset';
+          await channel.sendMessage(
+            chatJid,
+            `✓ Model switched to ${resolved}${suffix}.`,
+          );
+        } else {
+          await channel.sendMessage(
+            chatJid,
+            `Unknown model "${alias}". Try: haiku, sonnet, opus.`,
+          );
+        }
+      }
+      return true;
+    }
+
+    // !haiku / !sonnet / !opus — one-shot prefix
+    const oneShotMatch = text.match(/^!(haiku|sonnet|opus)\b/i);
+    if (oneShotMatch) {
+      invokeModel = resolveModelAlias(oneShotMatch[1]);
+    } else {
+      invokeModel = modelOverride;
+    }
+  }
+
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
@@ -228,6 +315,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       group: group.name,
       messageCount: missedMessages.length,
       hasImage: !!imageData,
+      model: invokeModel,
     },
     'Processing messages',
   );
@@ -281,6 +369,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     },
     imageData,
+    invokeModel,
   );
 
   await channel.setTyping?.(chatJid, false);
@@ -315,6 +404,7 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   imageData?: { base64: string; mimeType: string },
+  model?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -332,6 +422,7 @@ async function runAgent(
       schedule_value: t.schedule_value,
       status: t.status,
       next_run: t.next_run,
+      model: t.model,
     })),
   );
 
@@ -367,6 +458,7 @@ async function runAgent(
         assistantName: ASSISTANT_NAME,
         imageData: imageData?.base64,
         imageMimeType: imageData?.mimeType,
+        model,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -713,6 +805,7 @@ async function main(): Promise<void> {
         schedule_value: t.schedule_value,
         status: t.status,
         next_run: t.next_run,
+        model: t.model,
       }));
       for (const group of Object.values(registeredGroups)) {
         writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
