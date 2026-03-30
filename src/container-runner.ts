@@ -294,6 +294,53 @@ function buildContainerArgs(
   if (hostUid != null && hostUid !== 1000) {
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
+
+    try {
+      // Create a synthetic passwd file to avoid "I have no name!" errors in the container (e.g. for ssh)
+      // We must ensure the home directory for this uid is /home/node so ssh finds its config.
+      let userName = 'node';
+      try {
+        userName = os.userInfo().username || 'node';
+      } catch (e) {
+        // Ignore if user isn't found
+      }
+
+      let passwdContent = '';
+      if (fs.existsSync('/etc/passwd')) {
+        const lines = fs.readFileSync('/etc/passwd', 'utf8').split('\n');
+        let found = false;
+        const modifiedLines = lines.map((line) => {
+          const parts = line.split(':');
+          if (parts.length >= 6 && parts[2] === String(hostUid)) {
+            parts[5] = '/home/node'; // Override home directory
+            found = true;
+            return parts.join(':');
+          }
+          return line;
+        });
+        if (!found) {
+          modifiedLines.push(
+            `${userName}:x:${hostUid}:${hostGid || hostUid}:${userName}:/home/node:/bin/bash`,
+          );
+        }
+        passwdContent = modifiedLines.join('\n');
+      } else {
+        passwdContent = `root:x:0:0:root:/root:/bin/bash\nnode:x:1000:1000:node:/home/node:/bin/bash\n${userName}:x:${hostUid}:${hostGid || hostUid}:${userName}:/home/node:/bin/bash\n`;
+      }
+
+      const passwdPath = path.join(os.tmpdir(), `nanoclaw-passwd-${hostUid}`);
+      fs.writeFileSync(passwdPath, passwdContent);
+      args.push('-v', `${passwdPath}:/etc/passwd:ro`);
+
+      if (fs.existsSync('/etc/group')) {
+        args.push('-v', '/etc/group:/etc/group:ro');
+      }
+    } catch (err) {
+      logger.warn(
+        { error: err },
+        'Failed to create synthetic passwd file for container',
+      );
+    }
   }
 
   // Forward all .env vars to the container as env vars so integrations work
