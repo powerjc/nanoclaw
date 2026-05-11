@@ -456,7 +456,8 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
         'mcp__sonarr_radarr__*',
-        'mcp__ha_shopping_list__*'
+        'mcp__ha_shopping_list__*',
+        'mcp__n8n_mcp__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -480,6 +481,16 @@ async function runQuery(
         ha_shopping_list: {
           command: 'node',
           args: [path.join(__dirname, 'ha-shopping-list-mcp.js')],
+        },
+        n8n_mcp: {
+          command: 'npx',
+          args: ['-y', 'n8n-mcp'],
+          env: {
+            N8N_API_URL: process.env.N8N_API_URL || '',
+            N8N_API_KEY: process.env.N8N_API_KEY || '',
+            MCP_MODE: 'stdio',
+            LOG_LEVEL: 'error',
+          },
         },
       },
       hooks: {
