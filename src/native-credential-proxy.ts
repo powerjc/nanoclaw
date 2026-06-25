@@ -41,7 +41,9 @@ export const NATIVE_CREDENTIAL_VARS = [
 
 /** Is the native `.env` credential opt-out enabled? */
 export function nativeCredentialsEnabled(): boolean {
-  return process.env[NATIVE_CREDENTIALS_FLAG] === 'true';
+  if (process.env[NATIVE_CREDENTIALS_FLAG] === 'true') return true;
+  const fromFile = readEnvFile([NATIVE_CREDENTIALS_FLAG]);
+  return fromFile[NATIVE_CREDENTIALS_FLAG] === 'true';
 }
 
 /**
