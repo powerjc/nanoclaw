@@ -327,3 +327,4 @@ If a user wants tasks running more than ~2x daily and a script can't reduce agen
 @./integrations/media-management.md
 @./integrations/paperless.md
 @./extra/jarvis-drop/integrations/ssh/ssh.md
+@./integrations/inbox.md
