@@ -42,7 +42,7 @@ private_key, .secret
 
 **Read-Only Project Root:**
 
-The main group's project root is mounted read-only. Writable paths the agent needs (group folder, IPC, `.claude/`) are mounted separately. This prevents the agent from modifying host application code (`src/`, `dist/`, `package.json`, etc.) which would bypass the sandbox entirely on next restart.
+The main group's project root is mounted read-only. Writable paths the agent needs (store, group folder, IPC, `.claude/`) are mounted separately. This prevents the agent from modifying host application code (`src/`, `dist/`, `package.json`, etc.) which would bypass the sandbox entirely on next restart. The `store/` directory is mounted read-write so the main agent can access the SQLite database directly.
 
 ### 3. Session Isolation
 
@@ -83,11 +83,54 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 - Any credentials matching blocked patterns
 - `.env` is shadowed with `/dev/null` in the project root mount
 
+### 6. Egress Lockdown (Forced Proxy)
+
+The `HTTPS_PROXY` env var only redirects *proxy-aware* clients — a tool that
+ignores it (or a raw socket) could reach the internet directly and bypass
+credential injection, approvals, and audit. Egress lockdown closes that hole at
+the network layer.
+
+**How it works:** agents are placed on a Docker `--internal` network
+(`nanoclaw-egress`) that has **no route to the internet**. The OneCLI gateway
+container is attached to that network, aliased as `host.docker.internal`, so the
+injected proxy URL (`…@host.docker.internal:10255`) resolves to the gateway
+*container-to-container*. The gateway is therefore the **only reachable hop** —
+anything else has nowhere to go. The agent is non-root with no `NET_ADMIN`, so
+it cannot undo this. Identical mechanism on macOS and Linux (no host firewall,
+no `host-gateway` route).
+
+- **Self-healing:** the gateway is re-attached to the network at every spawn and
+  on each host-sweep tick, so an out-of-band detach (e.g. `docker compose up` on
+  the OneCLI stack — its compose lives in `~/.onecli`, not this repo) recovers
+  automatically.
+- **Fail-fast:** if lockdown is on but the network can't be created or the
+  gateway can't be attached (e.g. a non-standard gateway container name, or the
+  gateway isn't running), nanoclaw **refuses to spawn the agent** and surfaces a
+  clear error — it never silently falls back to open egress. Fix the cause (or
+  set `NANOCLAW_EGRESS_LOCKDOWN=false`) and retry. The host-sweep re-heal is the
+  exception: a heal failure there is logged but not fatal, since already-running
+  agents stay on the internal net (no leak) until the gateway returns.
+
+**Configuration:**
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `NANOCLAW_EGRESS_LOCKDOWN` | `false` | Set `true` to opt in (otherwise the host-gateway path is used). Enabled automatically by `/add-golden-registry`. |
+| `NANOCLAW_EGRESS_NETWORK` | `nanoclaw-egress` | Network name. |
+| `ONECLI_GATEWAY_CONTAINER` | `onecli` | Gateway container to attach. |
+
+**⚠ Behavior when enabled:** with lockdown on, agents have **no direct
+internet** — all traffic must go through OneCLI. Proxy-aware clients (npm, pnpm,
+pip, curl, node/bun with the proxy env) are unaffected. Any workflow that relies
+on a **non-proxy-aware** tool reaching the internet directly will fail by design.
+Lockdown is **off by default**; opt in with `NANOCLAW_EGRESS_LOCKDOWN=true`.
+
 ## Privilege Comparison
 
 | Capability | Main Group | Non-Main Group |
 |------------|------------|----------------|
 | Project root access | `/workspace/project` (ro) | None |
+| Store (SQLite DB) | `/workspace/project/store` (rw) | None |
 | Group folder | `/workspace/group` (rw) | `/workspace/group` (rw) |
 | Global memory | Implicit via project | `/workspace/global` (ro) |
 | Additional mounts | Configurable | Read-only unless allowed |
@@ -122,3 +165,39 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 │  • No real credentials in environment or filesystem              │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+## Supply Chain Security (pnpm)
+
+NanoClaw uses pnpm with two supply chain defenses configured in `pnpm-workspace.yaml`:
+
+### Minimum Release Age
+
+`minimumReleaseAge: 4320` (3 days). pnpm will refuse to resolve any package version published less than 3 days ago. This defends against typosquatting and compromised maintainer accounts — most malicious publishes are detected and pulled within 72 hours.
+
+**Excluding a package from the release age gate** (`minimumReleaseAgeExclude`):
+
+This should be rare. When a zero-day fix or critical dependency requires an immediate update:
+
+1. The exclusion must be reviewed and approved by a human maintainer
+2. The entry must pin the **exact version** being excluded — never a range or wildcard
+   ```yaml
+   minimumReleaseAgeExclude:
+     some-package: "1.2.3"  # Approved by @user, 2026-04-14 — CVE-XXXX-YYYY fix
+   ```
+3. The exclusion should be removed once the version ages past the threshold (i.e. after 3 days)
+4. Automated agents (Claude, CI bots) must never add exclusions without human sign-off
+
+### Build Script Allowlist
+
+`onlyBuiltDependencies` restricts which packages can execute install/postinstall scripts. Only packages on this list are permitted to run build scripts during `pnpm install`. Currently allowed:
+
+- `better-sqlite3` — compiles native SQLite bindings
+- `esbuild` — downloads platform-specific binary
+- `protobufjs` — generates protobuf bindings (used by Baileys/libsignal)
+- `sharp` — downloads platform-specific image processing binary
+
+Adding a package to this list requires human approval — build scripts execute arbitrary code with the installing user's permissions.
+
+### `.npmrc` Safety Net
+
+The `.npmrc` file contains `minReleaseAge=3d` as a fallback. The authoritative setting is in `pnpm-workspace.yaml`, but `.npmrc` provides defense-in-depth if npm is ever invoked directly (e.g. by a tool that doesn't respect pnpm).
