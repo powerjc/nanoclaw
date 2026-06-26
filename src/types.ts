@@ -21,6 +21,7 @@ export interface ContainerConfigRow {
   max_messages_per_prompt: number | null;
   skills: string; // JSON: '"all"' | '["skill1","skill2"]'
   mcp_servers: string; // JSON: Record<string, McpServerConfig>
+  env: string; // JSON: Record<string, string>
   packages_apt: string; // JSON: string[]
   packages_npm: string; // JSON: string[]
   additional_mounts: string; // JSON: AdditionalMountConfig[]

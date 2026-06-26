@@ -449,6 +449,11 @@ async function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
   args.push(...nativeCredentialEnvArgs());
 
+  // Per-group env vars from container_configs.env (${VAR} refs already resolved).
+  for (const [key, value] of Object.entries(containerConfig.env ?? {})) {
+    args.push('-e', `${key}=${value}`);
+  }
+
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
     for (const [key, value] of Object.entries(providerContribution.env)) {

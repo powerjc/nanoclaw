@@ -61,6 +61,7 @@ export function backfillContainerConfigs(): void {
       max_messages_per_prompt: legacy.maxMessagesPerPrompt ?? null,
       skills: JSON.stringify(legacy.skills ?? 'all'),
       mcp_servers: JSON.stringify(legacy.mcpServers ?? {}),
+      env: '{}',
       packages_apt: JSON.stringify(legacy.packages?.apt ?? []),
       packages_npm: JSON.stringify(legacy.packages?.npm ?? []),
       additional_mounts: JSON.stringify(legacy.additionalMounts ?? []),

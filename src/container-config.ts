@@ -38,8 +38,25 @@ function resolveMcpEnvRefs(mcpServers: Record<string, McpServerConfig>): Record<
   return Object.fromEntries(
     Object.entries(mcpServers).map(([name, server]) => [
       name,
-      { ...server, env: server.env ? Object.fromEntries(Object.entries(server.env).map(([k, v]) => [k, resolve(v)])) : undefined },
+      {
+        ...server,
+        env: server.env ? Object.fromEntries(Object.entries(server.env).map(([k, v]) => [k, resolve(v)])) : undefined,
+      },
     ]),
+  );
+}
+
+/** Resolve ${VAR} references in the top-level env block. */
+function resolveEnvRefs(env: Record<string, string>): Record<string, string> {
+  const VAR_REF = /^\$\{(.+)\}$/;
+  const varNames = Object.values(env).map((v) => v.match(VAR_REF)?.[1]).filter((v): v is string => v != null);
+  if (varNames.length === 0) return env;
+  const fromFile = readEnvFile(varNames);
+  return Object.fromEntries(
+    Object.entries(env).map(([k, v]) => {
+      const match = v.match(VAR_REF);
+      return [k, match ? (process.env[match[1]] ?? fromFile[match[1]] ?? v) : v];
+    }),
   );
 }
 
@@ -59,6 +76,7 @@ export interface AdditionalMountConfig {
 /** Shape of the materialized `container.json` file read by the container runner. */
 export interface ContainerConfig {
   mcpServers: Record<string, McpServerConfig>;
+  env: Record<string, string>;
   packages: { apt: string[]; npm: string[] };
   imageTag?: string;
   additionalMounts: AdditionalMountConfig[];
@@ -76,6 +94,7 @@ export interface ContainerConfig {
 export function configFromDb(row: ContainerConfigRow, group: AgentGroup): ContainerConfig {
   return {
     mcpServers: JSON.parse(row.mcp_servers) as Record<string, McpServerConfig>,
+    env: JSON.parse(row.env ?? '{}') as Record<string, string>,
     packages: {
       apt: JSON.parse(row.packages_apt) as string[],
       npm: JSON.parse(row.packages_npm) as string[],
@@ -107,6 +126,7 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
 
   const config = configFromDb(row, group);
   config.mcpServers = resolveMcpEnvRefs(config.mcpServers);
+  config.env = resolveEnvRefs(config.env);
 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);
