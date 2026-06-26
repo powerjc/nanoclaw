@@ -12,9 +12,36 @@ import fs from 'fs';
 import path from 'path';
 
 import { GROUPS_DIR } from './config.js';
+import { readEnvFile } from './env.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import type { AgentGroup, ContainerConfigRow } from './types.js';
+
+/**
+ * Resolve ${VAR} references in MCP server env blocks from the host .env file.
+ * Secrets live in .env, DB stores only the reference — resolved at spawn time.
+ */
+function resolveMcpEnvRefs(mcpServers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+  const VAR_REF = /^\$\{(.+)\}$/;
+  const varNames = Object.values(mcpServers).flatMap((s) =>
+    Object.values(s.env ?? {})
+      .map((v) => v.match(VAR_REF)?.[1])
+      .filter((v): v is string => v != null),
+  );
+  if (varNames.length === 0) return mcpServers;
+  const fromFile = readEnvFile(varNames);
+  const resolve = (val: string): string => {
+    const match = val.match(VAR_REF);
+    if (!match) return val;
+    return process.env[match[1]] ?? fromFile[match[1]] ?? val;
+  };
+  return Object.fromEntries(
+    Object.entries(mcpServers).map(([name, server]) => [
+      name,
+      { ...server, env: server.env ? Object.fromEntries(Object.entries(server.env).map(([k, v]) => [k, resolve(v)])) : undefined },
+    ]),
+  );
+}
 
 export interface McpServerConfig {
   command: string;
@@ -79,6 +106,7 @@ export function materializeContainerJson(agentGroupId: string): ContainerConfig 
   if (!row) throw new Error(`Container config not found for agent group: ${agentGroupId}`);
 
   const config = configFromDb(row, group);
+  config.mcpServers = resolveMcpEnvRefs(config.mcpServers);
 
   const p = path.join(GROUPS_DIR, group.folder, 'container.json');
   const dir = path.dirname(p);
