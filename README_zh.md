@@ -159,20 +159,6 @@ Docker 提供跨平台支持（macOS、Linux、Windows via WSL2）和成熟的�
 
 可以。推荐做法是 `/add-opencode`（通过 OpenCode 配置接入 OpenRouter、OpenAI、Google、DeepSeek 等）或 `/add-ollama-provider`（通过 Ollama 使用本地开源权重模型）。两者都可以按智能体组单独配置，所以同一套安装里不同的智能体可以运行在不同的后端上。
 
-对于一次性实验，任何 Claude API 兼容的端点也可以通过 `.env` 使用：
-
-```bash
-ANTHROPIC_BASE_URL=https://your-api-endpoint.com
-ANTHROPIC_AUTH_TOKEN=your-token-here
-```
-
-这使您能够使用：
-- 通过 [Ollama](https://ollama.ai) 配合 API 代理运行的本地模型
-- 托管在 [Together AI](https://together.ai)、[Fireworks](https://fireworks.ai) 等平台上的开源模型
-- 兼容 Anthropic API 格式的自定义模型部署
-
-注意：为获得最佳兼容性，模型需支持 Anthropic API 格式。
-
 
 **我该如何调试问题？**
 
