@@ -49,7 +49,9 @@ function resolveMcpEnvRefs(mcpServers: Record<string, McpServerConfig>): Record<
 /** Resolve ${VAR} references in the top-level env block. */
 function resolveEnvRefs(env: Record<string, string>): Record<string, string> {
   const VAR_REF = /^\$\{(.+)\}$/;
-  const varNames = Object.values(env).map((v) => v.match(VAR_REF)?.[1]).filter((v): v is string => v != null);
+  const varNames = Object.values(env)
+    .map((v) => v.match(VAR_REF)?.[1])
+    .filter((v): v is string => v != null);
   if (varNames.length === 0) return env;
   const fromFile = readEnvFile(varNames);
   return Object.fromEntries(

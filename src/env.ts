@@ -26,10 +26,7 @@ export function readAllEnvFile(): Record<string, string> {
     // Strip inline comments (e.g. `VALUE=foo  # comment`)
     const commentIdx = value.search(/\s+#/);
     if (commentIdx !== -1) value = value.slice(0, commentIdx).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
     if (key && value) result[key] = value;
