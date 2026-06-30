@@ -87,13 +87,17 @@ registerWebhookHandler('inbound', async (req, res) => {
 
   // Find a wired messaging group to route through
   const db = getDb();
-  const mgRow = db.prepare(`
+  const mgRow = db
+    .prepare(
+      `
     SELECT mg.channel_type, mg.platform_id, mg.instance
     FROM messaging_group_agents mga
     JOIN messaging_groups mg ON mg.id = mga.messaging_group_id
     WHERE mga.agent_group_id = ?
     LIMIT 1
-  `).get(agentGroup.id) as { channel_type: string; platform_id: string; instance: string | null } | undefined;
+  `,
+    )
+    .get(agentGroup.id) as { channel_type: string; platform_id: string; instance: string | null } | undefined;
 
   if (!mgRow) {
     res.writeHead(404);
