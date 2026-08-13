@@ -1,11 +1,11 @@
 ---
 name: add-opencode
-description: Use OpenCode as an agent provider (AGENT_PROVIDER=opencode). OpenRouter, OpenAI, Google, DeepSeek, etc. via OpenCode config — not the Anthropic Agent SDK. Per-session and per-group via agent_provider; host passes OPENCODE_* and XDG mount when spawning containers.
+description: Use OpenCode as an agent provider. OpenRouter, OpenAI, Google, DeepSeek, etc. via OpenCode config — not the Anthropic Agent SDK. Per group via `ncl groups config update --provider opencode`; host passes OPENCODE_* and XDG mount when spawning containers.
 ---
 
 # OpenCode agent provider
 
-NanoClaw runs agents in a long-lived **poll loop** inside the container. The backend is selected with **`AGENT_PROVIDER`** (`claude` | `opencode` | `mock`).
+NanoClaw runs agents in a long-lived **poll loop** inside the container. The backend is selected per agent group by the **`provider`** key in that group's `container.json` (materialized from the `container_configs` table) — set it with `ncl groups config update --provider opencode`. Default is `claude`.
 
 Trunk ships with only the `claude` provider baked in. This skill copies the OpenCode provider files in from the `providers` branch, wires them into the host and container barrels, installs dependencies, and rebuilds the image.
 
@@ -43,7 +43,11 @@ git show origin/providers:container/agent-runner/src/providers/opencode.ts      
 git show origin/providers:container/agent-runner/src/providers/mcp-to-opencode.ts       > container/agent-runner/src/providers/mcp-to-opencode.ts
 git show origin/providers:container/agent-runner/src/providers/mcp-to-opencode.test.ts  > container/agent-runner/src/providers/mcp-to-opencode.test.ts
 git show origin/providers:container/agent-runner/src/providers/opencode.factory.test.ts > container/agent-runner/src/providers/opencode.factory.test.ts
+git show origin/providers:container/agent-runner/src/providers/cwd-shim.ts              > container/agent-runner/src/providers/cwd-shim.ts.new && mv container/agent-runner/src/providers/cwd-shim.ts.new container/agent-runner/src/providers/cwd-shim.ts
+git show origin/providers:container/agent-runner/src/providers/cwd-shim.test.ts         > container/agent-runner/src/providers/cwd-shim.test.ts.new && mv container/agent-runner/src/providers/cwd-shim.test.ts.new container/agent-runner/src/providers/cwd-shim.test.ts
 ```
+
+(`cwd-shim.ts` is byte-identical to the trunk copy on current trunks — `mcp-to-opencode.ts` imports it, so copying it keeps the payload self-sufficient on trunks that predate it. These two overwrite real trunk files, so they go through a `.new` + `mv` guard: on a providers branch that predates the cwd payload, `git show` fails without truncating the live copy the default provider imports.)
 
 Also copy the two barrel-registration guards — one per tree. These import the real provider barrels and assert `opencode` is registered, so they go red the moment a barrel import line is deleted or drifts:
 
@@ -137,6 +141,7 @@ for overlay in data/v2-sessions/*/agent-runner-src/providers/; do
   [ -d "$overlay" ] || continue
   cp container/agent-runner/src/providers/opencode.ts "$overlay"
   cp container/agent-runner/src/providers/mcp-to-opencode.ts "$overlay"
+  cp container/agent-runner/src/providers/cwd-shim.ts "$overlay"
   cp container/agent-runner/src/providers/index.ts "$overlay"
   echo "Updated: $overlay"
 done
@@ -148,7 +153,7 @@ done
 
 Set model/provider strings in the form OpenCode expects (often `provider/model-id`). **Put comments on their own lines** — a `#` inside a value is kept verbatim and breaks model IDs.
 
-These variables are read **on the host** and passed into the container only when the effective provider is `opencode`. They do not switch the provider by themselves; the DB still needs `agent_provider` set (below).
+These variables are read **on the host** and passed into the container only when the effective provider is `opencode`. They do not switch the provider by themselves; the group still needs `provider` set to `opencode` (see [Select the provider](#select-the-provider) below).
 
 - `OPENCODE_PROVIDER` — OpenCode provider id, e.g. `openrouter`, `anthropic`, `deepseek`.
 - `OPENCODE_MODEL` — full model id in `provider/model` form, e.g. `deepseek/deepseek-chat`.
@@ -215,7 +220,7 @@ OPENCODE_SMALL_MODEL=anthropic/claude-haiku-4-5-20251001
 
 Zen's HTTP API (e.g. `POST …/zen/v1/messages`) expects the key in the **`x-api-key`** header. If OneCLI injects **`Authorization: Bearer …`** only, Zen often returns **401 / "Missing API key"** even though the gateway is working.
 
-**Naming:** NanoClaw **`AGENT_PROVIDER=opencode`** (DB `agent_provider`) means "run the **OpenCode agent provider**." Separately, **`OPENCODE_PROVIDER=opencode`** in `.env` is OpenCode's **Zen provider id** inside the OpenCode config (see [Zen docs](https://opencode.ai/docs/zen/)).
+**Naming:** NanoClaw's **`provider: opencode`** (the `container.json` key, set via `ncl groups config update --provider opencode`) means "run the **OpenCode agent provider**." Separately, **`OPENCODE_PROVIDER=opencode`** in `.env` is OpenCode's **Zen provider id** inside the OpenCode config (see [Zen docs](https://opencode.ai/docs/zen/)).
 
 **Host `.env` (typical Zen shape):**
 
@@ -236,9 +241,16 @@ onecli secrets create --name "OpenCode Zen" --type generic \
   --header-name "x-api-key" --value-format "{value}"
 ```
 
-### Per group / per session
+### Select the provider
 
-Set `"provider": "opencode"` in the group's **`container.json`** (`groups/<folder>/container.json`) — the in-container runner reads `provider` from there, not from the DB. The DB columns **`agent_groups.agent_provider`** and **`sessions.agent_provider`** (session overrides group) only drive host-side provider contribution — per-session XDG mount, `OPENCODE_*` env passthrough — and do not propagate into `container.json` at spawn time. Set both, or just edit `container.json`; if they disagree, the runner uses `container.json` and the host-side resolver falls back through session → group → `container.json` → `'claude'`.
+Per group, from the host:
+
+```bash
+ncl groups config update --id <group-id> --provider opencode
+ncl groups restart --id <group-id>
+```
+
+`ncl groups config update --provider` writes the `provider` value into the `container_configs` table; the host materializes it into `groups/<folder>/container.json` at spawn time and the in-container runner reads `provider` from there (defaulting to `claude`). The restart picks up the change. Switching is an operator action — run it from the host. Memory does NOT carry over automatically between providers — run `/migrate-memory` to carry it across.
 
 Extra MCP servers still come from **`NANOCLAW_MCP_SERVERS`** / `container_config.mcpServers` on the host; the runner merges them into the same `mcpServers` object passed to **both** Claude and OpenCode providers.
 
@@ -250,6 +262,6 @@ Extra MCP servers still come from **`NANOCLAW_MCP_SERVERS`** / `container_config
 
 ## Next Steps
 
-The registration and Dockerfile guards in step 7 verify the wiring. To confirm an end-to-end round-trip, set `agent_provider = 'opencode'` (or `"provider": "opencode"` in the group's `container.json`) on a test group, register the matching provider key in OneCLI, and send a message. A clean exchange returns the model's reply with no `Unknown provider: opencode` error and no UUID/session warnings in the logs.
+The registration and Dockerfile guards in step 7 verify the wiring. To confirm an end-to-end round-trip, switch a test group with `ncl groups config update --id <group-id> --provider opencode && ncl groups restart --id <group-id>`, register the matching provider key in OneCLI, and send a message. A clean exchange returns the model's reply with no `Unknown provider: opencode` error and no UUID/session warnings in the logs.
 
 To remove this provider, see [REMOVE.md](REMOVE.md).
