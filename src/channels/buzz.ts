@@ -17,13 +17,27 @@
  * false — NIP-29 channels are flat, one conversation per channel, like Signal/
  * Telegram/DeltaChat, not sub-threaded like Discord.
  *
+ * Inbound delivery is polled, not a live subscription: confirmed by live
+ * testing against a real Buzz relay that it answers a REQ with a one-time
+ * snapshot (stored matches + EOSE) and never pushes anything to that
+ * subscription afterward, `since` filter or not — a real relay-side limit,
+ * not something fixable by changing the filter shape. So instead of one
+ * persistent kind:9 subscription, the adapter re-issues a one-shot REQ with
+ * `since: lastSeenTs` (inclusive — a per-second id set dedups the boundary,
+ * since a strict lastSeenTs+1 can miss a message landing in the same second
+ * the baseline was set) every POLL_INTERVAL_MS. Each connect skips backlog
+ * (`lastSeenTs` starts at connect time) rather than replaying history — this
+ * also sidesteps re-inserting already-processed messages into `messages_in`
+ * on every restart, which previously collided on the id UNIQUE constraint.
+ * Trade-off: messages sent while the process is down are not backfilled, and
+ * live latency is bounded by POLL_INTERVAL_MS rather than instant.
+ *
  * Required env vars (.env): BUZZ_RELAY_URL (e.g. ws://10.0.99.13:3000),
  *                           BUZZ_NSEC (bech32 nsec1... form)
  */
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import type { Event as NostrEvent, EventTemplate, VerifiedEvent } from 'nostr-tools/pure';
 import { Relay, useWebSocketImplementation } from 'nostr-tools/relay';
-import type { Subscription } from 'nostr-tools/relay';
 import { decode as nip19Decode } from 'nostr-tools/nip19';
 import { parseGroupMetadataEvent, parseGroupMembersEvent } from 'nostr-tools/nip29';
 import WebSocket from 'ws';
@@ -42,6 +56,7 @@ useWebSocketImplementation(WebSocket as unknown as typeof globalThis.WebSocket);
 const AUTH_POLL_MS = 150;
 const AUTH_TIMEOUT_MS = 10_000;
 const HEALTH_CHECK_MS = 5 * 60 * 1000;
+const INBOUND_POLL_MS = 8_000;
 
 interface BuzzEnv {
   relayUrl: string;
@@ -72,8 +87,16 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
   const pubkey = getPublicKey(env.secretKey);
 
   let relay: Relay | null = null;
-  let inboundSub: Subscription | null = null;
   let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+  let inboundPollTimer: ReturnType<typeof setInterval> | null = null;
+  let memberGroupIds: string[] = [];
+  let lastSeenTs = 0;
+  // Event ids already delivered at exactly lastSeenTs — `since` is inclusive
+  // of that second, so without this a message landing in the same second the
+  // poll baseline advances would be redelivered on the next poll. Cleared
+  // whenever lastSeenTs moves forward (older ids can never reappear once
+  // `since` has advanced past their second).
+  const seenAtLastSeenTs = new Set<string>();
   const groups = new Map<string, GroupInfo>(); // groupId -> metadata
   const memberLabels = new Map<string, Map<string, string>>(); // groupId -> pubkey -> label
 
@@ -105,13 +128,13 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
     }
   }
 
-  /** One-shot subscribe/collect/EOSE-close, for discovery queries that aren't kept open. */
+  /** One-shot subscribe/collect/EOSE-close — used for discovery, membership, and inbound polling alike. */
   function collectOnce(r: Relay, filter: Parameters<Relay['subscribe']>[0][number]): Promise<NostrEvent[]> {
     return new Promise((resolve, reject) => {
       const events: NostrEvent[] = [];
       const timeout = setTimeout(() => {
         sub.close();
-        reject(new Error('Buzz: discovery query timed out'));
+        reject(new Error('Buzz: relay query timed out'));
       }, AUTH_TIMEOUT_MS);
       const sub = r.subscribe([filter], {
         onevent(event) {
@@ -188,6 +211,35 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
     });
   }
 
+  /** Re-issues a one-shot REQ for anything at or after lastSeenTs (inclusive —
+   *  see seenAtLastSeenTs above for why) — see the file-header comment for why
+   *  this polls instead of using a persistent subscription. */
+  async function pollInbound(config: ChannelSetup): Promise<void> {
+    if (!relay?.connected || memberGroupIds.length === 0) return;
+    let events: NostrEvent[];
+    try {
+      events = await collectOnce(relay, { kinds: [9], '#h': memberGroupIds, since: lastSeenTs });
+    } catch (err) {
+      log.warn('Buzz: inbound poll failed, will retry next interval', { err });
+      return;
+    }
+    // Sort ascending — NIP-01 doesn't guarantee delivery order, and lastSeenTs
+    // must advance monotonically for the same-second dedup logic below to hold.
+    events.sort((a, b) => a.created_at - b.created_at);
+    for (const event of events) {
+      if (event.created_at < lastSeenTs) continue; // defensive; `since` should already exclude these
+      if (event.created_at === lastSeenTs) {
+        if (seenAtLastSeenTs.has(event.id)) continue;
+        seenAtLastSeenTs.add(event.id);
+      } else {
+        lastSeenTs = event.created_at;
+        seenAtLastSeenTs.clear();
+        seenAtLastSeenTs.add(event.id);
+      }
+      handleInboundEvent(config, event);
+    }
+  }
+
   const adapter: ChannelAdapter = {
     name: 'buzz',
     channelType: 'buzz',
@@ -215,7 +267,7 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
       await waitForAuth(r);
 
       const discovered = await discoverGroups(r);
-      const memberGroupIds: string[] = [];
+      memberGroupIds = [];
       for (const group of discovered) {
         const isMember = await checkMembership(r, group.id);
         if (!isMember) continue;
@@ -224,16 +276,19 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
         config.onMetadata(platformIdFor(group.id), group.name, true);
       }
 
-      if (memberGroupIds.length > 0) {
-        inboundSub = r.subscribe([{ kinds: [9], '#h': memberGroupIds }], {
-          onevent: (event) => handleInboundEvent(config, event),
-        });
-      } else {
+      if (memberGroupIds.length === 0) {
         log.warn('Buzz: identity is not a member of any discovered group — connected but idle', {
           relayUrl: env.relayUrl,
           pubkey,
         });
       }
+
+      // Skip backlog on connect (see file-header comment) — only poll for
+      // messages from this point forward.
+      lastSeenTs = Math.floor(Date.now() / 1000);
+      inboundPollTimer = setInterval(() => {
+        pollInbound(config).catch((err) => log.warn('Buzz: inbound poll threw unexpectedly', { err }));
+      }, INBOUND_POLL_MS);
 
       // Defensive backstop for a known nostr-tools edge case: an error-flavored
       // (vs. clean-close) drop on the very first connection attempt can leave
@@ -254,7 +309,7 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
 
     async teardown(): Promise<void> {
       if (healthCheckTimer) clearInterval(healthCheckTimer);
-      inboundSub?.close();
+      if (inboundPollTimer) clearInterval(inboundPollTimer);
       relay?.close();
       relay = null;
     },

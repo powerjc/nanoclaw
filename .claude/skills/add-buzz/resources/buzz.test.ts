@@ -172,6 +172,19 @@ async function bootstrapConnectedAdapter(config: ChannelSetup): Promise<{ adapte
   return { adapter, socket };
 }
 
+/** Waits for the next real inbound-poll cycle (INBOUND_POLL_MS in buzz.ts —
+ *  inbound delivery is polled, not a live subscription; see that file's
+ *  header comment for why) and answers it with a single event. */
+async function deliverViaPoll(socket: FakeWebSocket, event: ReturnType<typeof channelMessageEvent>): Promise<void> {
+  const before = socket.sent.filter((f) => f[0] === 'REQ' && (f[2] as { kinds?: number[] })?.kinds?.[0] === 9).length;
+  await waitFor(() => socket.sent.filter((f) => f[0] === 'REQ' && (f[2] as { kinds?: number[] })?.kinds?.[0] === 9).length > before, 12_000);
+  const polls = socket.sent.filter((f) => f[0] === 'REQ' && (f[2] as { kinds?: number[] })?.kinds?.[0] === 9);
+  const subId = polls[polls.length - 1][1] as string;
+  socket.simulateMessage(['EVENT', subId, event]);
+  socket.simulateMessage(['EOSE', subId]);
+  await flush();
+}
+
 beforeEach(() => {
   fakeSockets = [];
   createdAdapters = [];
@@ -212,46 +225,52 @@ describe('buzz channel adapter', () => {
     await expect(setupPromise).rejects.toMatchObject({ name: 'NetworkError' });
   });
 
-  it("does not call onInbound for the adapter identity's own posts (echo skip)", async () => {
-    const config = createConfig();
-    const { socket } = await bootstrapConnectedAdapter(config);
+  it(
+    "does not call onInbound for the adapter identity's own posts (echo skip)",
+    async () => {
+      const config = createConfig();
+      const { socket } = await bootstrapConnectedAdapter(config);
 
-    const { subId } = socket.reqFor(9)!;
-    socket.simulateMessage(['EVENT', subId, channelMessageEvent('hello from myself', [], TEST_SECRET_KEY)]);
-    await flush();
+      await deliverViaPoll(socket, channelMessageEvent('hello from myself', [], TEST_SECRET_KEY));
 
-    expect(config.onInbound).not.toHaveBeenCalled();
-  });
+      expect(config.onInbound).not.toHaveBeenCalled();
+    },
+    15_000,
+  );
 
-  it('calls onInbound with isMention=true when a p-tag names our pubkey', async () => {
-    const config = createConfig();
-    const { socket } = await bootstrapConnectedAdapter(config);
+  it(
+    'calls onInbound with isMention=true when a p-tag names our pubkey',
+    async () => {
+      const config = createConfig();
+      const { socket } = await bootstrapConnectedAdapter(config);
 
-    const { subId } = socket.reqFor(9)!;
-    socket.simulateMessage(['EVENT', subId, channelMessageEvent('hey buzz', [['p', TEST_PUBKEY]])]);
-    await flush();
+      await deliverViaPoll(socket, channelMessageEvent('hey buzz', [['p', TEST_PUBKEY]]));
 
-    expect(config.onInbound).toHaveBeenCalledWith(
-      `buzz:${GROUP_ID}`,
-      null,
-      expect.objectContaining({ isMention: true, isGroup: true }),
-    );
-  });
+      expect(config.onInbound).toHaveBeenCalledWith(
+        `buzz:${GROUP_ID}`,
+        null,
+        expect.objectContaining({ isMention: true, isGroup: true }),
+      );
+    },
+    15_000,
+  );
 
-  it('calls onInbound with isMention=undefined when no p-tag names our pubkey', async () => {
-    const config = createConfig();
-    const { socket } = await bootstrapConnectedAdapter(config);
+  it(
+    'calls onInbound with isMention=undefined when no p-tag names our pubkey',
+    async () => {
+      const config = createConfig();
+      const { socket } = await bootstrapConnectedAdapter(config);
 
-    const { subId } = socket.reqFor(9)!;
-    socket.simulateMessage(['EVENT', subId, channelMessageEvent('just chatting')]);
-    await flush();
+      await deliverViaPoll(socket, channelMessageEvent('just chatting'));
 
-    expect(config.onInbound).toHaveBeenCalledWith(
-      `buzz:${GROUP_ID}`,
-      null,
-      expect.objectContaining({ isMention: undefined }),
-    );
-  });
+      expect(config.onInbound).toHaveBeenCalledWith(
+        `buzz:${GROUP_ID}`,
+        null,
+        expect.objectContaining({ isMention: undefined }),
+      );
+    },
+    15_000,
+  );
 
   it('deliver() publishes a correctly-shaped kind:9 EVENT and resolves to the event id on OK', async () => {
     const { adapter, socket } = await bootstrapConnectedAdapter(createConfig());
