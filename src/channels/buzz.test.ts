@@ -135,9 +135,12 @@ function channelMessageEvent(content: string, extraTags: string[][] = [], signer
 }
 
 /** Imports the (freshly-reset) buzz module and builds an adapter instance via
- *  its registered factory — mirrors what channel-registry.ts does at boot. */
+ *  its registered factory — mirrors what channel-registry.ts does at boot.
+ *  BUZZ_INSTANCES is set to a single "test" instance in beforeEach, so
+ *  registerBuzzInstances() makes exactly one registerChannelAdapter call
+ *  ('buzz-test') and .at(-1) unambiguously grabs it. */
 async function createTestAdapter(): Promise<ChannelAdapter> {
-  await import('./buzz.js'); // side-effecting: runs registerChannelAdapter('buzz', ...)
+  await import('./buzz.js'); // side-effecting: runs registerBuzzInstances()
   const registerMock = (await import('./channel-registry.js')).registerChannelAdapter as ReturnType<typeof vi.fn>;
   const registration = registerMock.mock.calls.at(-1)?.[1];
   const adapter = registration.factory() as ChannelAdapter;
@@ -203,7 +206,8 @@ beforeEach(() => {
   createdAdapters = [];
   vi.resetModules();
   process.env.BUZZ_RELAY_URL = 'ws://fake-relay:3000';
-  process.env.BUZZ_NSEC = nsecEncode(TEST_SECRET_KEY);
+  process.env.BUZZ_INSTANCES = 'test';
+  process.env.BUZZ_NSEC_TEST = nsecEncode(TEST_SECRET_KEY);
 });
 
 afterEach(async () => {
@@ -211,10 +215,10 @@ afterEach(async () => {
 });
 
 describe('buzz channel adapter', () => {
-  it('registers via registerChannelAdapter with a factory and defaults', async () => {
+  it('registers one instance per BUZZ_INSTANCES entry via registerChannelAdapter', async () => {
     await import('./buzz.js');
     const registerMock = (await import('./channel-registry.js')).registerChannelAdapter as ReturnType<typeof vi.fn>;
-    expect(registerMock).toHaveBeenCalledWith('buzz', expect.objectContaining({ defaults: expect.any(Object) }));
+    expect(registerMock).toHaveBeenCalledWith('buzz-test', expect.objectContaining({ defaults: expect.any(Object) }));
   });
 
   it('completes the NIP-42 auth handshake and reports connected', async () => {

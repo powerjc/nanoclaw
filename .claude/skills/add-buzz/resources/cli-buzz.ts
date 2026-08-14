@@ -2,25 +2,25 @@
  * Buzz (Nostr) identity actions — `ncl buzz <verb>`.
  *
  * Not a DB-backed resource (no `operations`, no generic list/get) — every
- * verb here signs and publishes to the Buzz relay using the host-only
- * BUZZ_NSEC identity src/channels/buzz.ts also uses. The container never
- * receives that key; this handler runs host-side, same as every other `ncl`
- * verb, reached via the normal container DB transport
- * (container/agent-runner/src/cli/ncl.ts) with no special-casing needed
- * there.
+ * verb here signs and publishes to the Buzz relay using a host-only
+ * BUZZ_NSEC_<INSTANCE> identity, same multi-instance model as
+ * src/channels/buzz.ts (one Nostr keypair per persona, not one shared
+ * identity for the whole install — see that file's header comment). The
+ * container never receives any of these keys; this handler runs host-side,
+ * same as every other `ncl` verb, reached via the normal container DB
+ * transport (container/agent-runner/src/cli/ncl.ts) with no special-casing
+ * needed there.
  *
  * access: 'open' — any caller who reaches this resource (see the
  * GROUP_SCOPE_RESOURCES entry in ../registry.ts) can call set-profile
- * without admin approval. It's self-scoped (the shared Buzz identity's own
- * display name/about/picture) and reversible. handler-level wiring check
- * below denies agent callers whose agent group has no Buzz channel wired at
- * all, so a group with no Buzz relationship can't reach this even though
- * it's globally registered — see docs/buzz-mcp-tooling-spec.md's
- * "unconditional availability" note for why that check matters given one
- * shared identity spans multiple agent groups today. A future, more
- * sensitive Buzz verb (e.g. anything that posts to a channel/DM outside
- * the caller's own wiring) should use `access: 'approval'` rather than
- * extending this one's `open` access.
+ * without admin approval. It's self-scoped (a persona's own display
+ * name/about/picture) and reversible. `resolveInstance` below both picks
+ * which identity a call targets AND enforces that an agent caller can only
+ * ever target an instance its own agent group is actually wired to — it
+ * can't reach for another persona's Buzz identity by guessing an
+ * `--instance` value. A future, more sensitive Buzz verb (e.g. anything
+ * that posts to a channel/DM outside the caller's own wiring) should use
+ * `access: 'approval'` rather than extending this one's `open` access.
  */
 import { finalizeEvent, getPublicKey, type Event as NostrEvent } from 'nostr-tools/pure';
 import { Relay, useWebSocketImplementation } from 'nostr-tools/relay';
@@ -49,10 +49,11 @@ interface BuzzIdentity {
   secretKey: Uint8Array;
 }
 
-async function loadIdentity(): Promise<BuzzIdentity | null> {
-  const env = readEnvFile(['BUZZ_RELAY_URL', 'BUZZ_NSEC']);
+async function loadIdentity(instance: string): Promise<BuzzIdentity | null> {
+  const nsecKey = `BUZZ_NSEC_${instance.toUpperCase()}`;
+  const env = readEnvFile(['BUZZ_RELAY_URL', nsecKey]);
   const relayUrl = process.env.BUZZ_RELAY_URL || env.BUZZ_RELAY_URL || '';
-  const nsec = process.env.BUZZ_NSEC || env.BUZZ_NSEC || '';
+  const nsec = process.env[nsecKey] || env[nsecKey] || '';
   if (!relayUrl || !nsec) return null;
   try {
     const decoded = nip19Decode(nsec);
@@ -61,6 +62,40 @@ async function loadIdentity(): Promise<BuzzIdentity | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Which Buzz identity this call targets, and the authorization check that
+ * goes with it. An explicit `--instance` is honored only for host callers
+ * (the operator, via the CLI socket — no agent group to scope to). An agent
+ * caller's instance is always derived from its own wiring, never from
+ * `--instance` — an agent group wired to `buzz-fitness` cannot pass
+ * `--instance realestate` and reach a different persona's identity. Denies
+ * outright if the calling agent group has no Buzz channel wired at all, or
+ * is wired to more than one Buzz instance (ambiguous — not expected under
+ * today's one-instance-per-agent-group design, fails closed rather than
+ * guessing).
+ */
+function resolveInstance(args: Record<string, unknown>, ctx: CallerContext): string {
+  if (ctx.caller === 'host') {
+    const explicit = args.instance as string | undefined;
+    if (!explicit) {
+      throw new Error('--instance is required when calling ncl buzz from the host (no agent group context to infer it from)');
+    }
+    return explicit;
+  }
+
+  const buzzGroups = getMessagingGroupsByAgentGroup(ctx.agentGroupId).filter((mg) => mg.channel_type === 'buzz');
+  if (buzzGroups.length === 0) {
+    throw new Error('this agent group has no Buzz channel wired — buzz commands are only available to agents connected to Buzz');
+  }
+  const instances = new Set(buzzGroups.map((mg) => (mg.instance ?? 'buzz-').replace(/^buzz-/, '')));
+  if (instances.size > 1) {
+    throw new Error(
+      `this agent group is wired to multiple Buzz identities (${[...instances].join(', ')}) — this shouldn't happen under the current one-instance-per-agent-group design; check the wiring`,
+    );
+  }
+  return [...instances][0];
 }
 
 /** Bounded retry against the "no challenge was received yet" race — see
@@ -107,19 +142,11 @@ function collectOnce(relay: Relay, filter: Parameters<Relay['subscribe']>[0][num
   });
 }
 
-function requireBuzzWiring(ctx: CallerContext): void {
-  if (ctx.caller !== 'agent') return;
-  const wired = getMessagingGroupsByAgentGroup(ctx.agentGroupId).some((mg) => mg.channel_type === 'buzz');
-  if (!wired) {
-    throw new Error('this agent group has no Buzz channel wired — buzz commands are only available to agents connected to Buzz');
-  }
-}
-
 registerResource({
   name: 'buzz-identity',
   plural: 'buzz',
   table: '', // not DB-backed — no generic operations are registered below
-  description: "Buzz (Nostr) identity actions for the shared BUZZ_NSEC identity — see 'ncl buzz help' for verbs.",
+  description: "Buzz (Nostr) identity actions — one identity per persona, see 'ncl buzz help' for verbs.",
   idColumn: 'id',
   columns: [],
   operations: {},
@@ -127,15 +154,19 @@ registerResource({
     'set-profile': {
       access: 'open',
       description:
-        "Update the shared Buzz identity's profile (display name / about / avatar). Reads the current profile first and merges — does not erase fields you don't pass.",
+        "Update this identity's Buzz profile (display name / about / avatar). Reads the current profile first and merges — does not erase fields you don't pass. Agent callers always target their own wired identity; --instance is for host/operator calls only.",
       args: [
         { name: 'name', type: 'string', description: 'Display name' },
         { name: 'about', type: 'string', description: 'Bio / about text' },
         { name: 'picture', type: 'string', description: 'Avatar image URL (https:// only)' },
+        { name: 'instance', type: 'string', description: 'Which Buzz identity (host/operator calls only — agents always use their own wired identity)' },
       ],
-      examples: ['ncl buzz set-profile --name "Mycroft" --about "Infra & ops. Old graybeard sysadmin."'],
+      examples: [
+        'ncl buzz set-profile --name "Mycroft" --about "Infra & ops. Old graybeard sysadmin."',
+        'ncl buzz set-profile --instance fitness --name "Hans"  # host-only, explicit instance',
+      ],
       handler: async (args, ctx) => {
-        requireBuzzWiring(ctx);
+        const instance = resolveInstance(args, ctx);
 
         const name = args.name as string | undefined;
         const about = args.about as string | undefined;
@@ -156,8 +187,8 @@ registerResource({
           throw new Error('--picture must be an https:// URL');
         }
 
-        const identity = await loadIdentity();
-        if (!identity) throw new Error('BUZZ_RELAY_URL/BUZZ_NSEC not configured on this host');
+        const identity = await loadIdentity(instance);
+        if (!identity) throw new Error(`BUZZ_RELAY_URL/BUZZ_NSEC_${instance.toUpperCase()} not configured on this host`);
         const pubkey = getPublicKey(identity.secretKey);
 
         const relay = await Relay.connect(identity.relayUrl, {});
@@ -200,14 +231,14 @@ registerResource({
             throw new Error('profile event published but could not be confirmed on the relay — it may not have landed');
           }
 
-          return { eventId: event.id, profile: merged };
+          return { instance, eventId: event.id, profile: merged };
         } finally {
           relay.close();
         }
       },
       formatHuman: (data) => {
-        const { eventId, profile } = data as { eventId: string; profile: Record<string, unknown> };
-        return `Buzz profile updated (event ${String(eventId).slice(0, 12)}...): ${JSON.stringify(profile)}`;
+        const { instance, eventId, profile } = data as { instance: string; eventId: string; profile: Record<string, unknown> };
+        return `Buzz[${instance}] profile updated (event ${String(eventId).slice(0, 12)}...): ${JSON.stringify(profile)}`;
       },
     },
   },

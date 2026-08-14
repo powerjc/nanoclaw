@@ -32,8 +32,27 @@
  * Trade-off: messages sent while the process is down are not backfilled, and
  * live latency is bounded by POLL_INTERVAL_MS rather than instant.
  *
- * Required env vars (.env): BUZZ_RELAY_URL (e.g. ws://10.0.99.13:3000),
- *                           BUZZ_NSEC (bech32 nsec1... form)
+ * Multi-instance: one Nostr identity per NanoClaw persona, not one shared
+ * identity for the whole install (that was the MVP starting point but was
+ * deliberately dropped — a shared identity means Buzz can't distinguish
+ * which persona is actually replying, and every persona's replies render as
+ * the same name). Each instance is a fully independent adapter registration
+ * (own connection, own poll loop, own discovered-groups/membership state) —
+ * same pattern channel-registry.ts already supports for other channels
+ * (e.g. multiple Slack apps in one workspace), this is just the first real
+ * consumer for Buzz. `channelType` stays `'buzz'` for every instance (same
+ * semantic platform); `instance` (`buzz-<name>`) is the routing key that
+ * keeps each persona's messaging_groups rows separate even when two
+ * instances are both members of the exact same underlying Buzz channel
+ * (platform_id `buzz:<channel-uuid>` is identical across instances by
+ * design — the channel is the same real Buzz channel either way).
+ *
+ * Required env vars (.env): BUZZ_RELAY_URL (shared relay, e.g.
+ *                           ws://10.0.99.13:3000), BUZZ_INSTANCES
+ *                           (comma-separated instance names, e.g.
+ *                           "main,infra,fitness,realestate"), and one
+ *                           BUZZ_NSEC_<INSTANCE> (bech32 nsec1... form,
+ *                           instance name upper-cased) per listed instance.
  */
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import type { Event as NostrEvent, EventTemplate, VerifiedEvent } from 'nostr-tools/pure';
@@ -59,6 +78,7 @@ const HEALTH_CHECK_MS = 5 * 60 * 1000;
 const INBOUND_POLL_MS = 8_000;
 
 interface BuzzEnv {
+  instance: string;
   relayUrl: string;
   secretKey: Uint8Array;
 }
@@ -241,8 +261,9 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
   }
 
   const adapter: ChannelAdapter = {
-    name: 'buzz',
+    name: `buzz-${env.instance}`,
     channelType: 'buzz',
+    instance: `buzz-${env.instance}`,
     supportsThreads: false,
     defaults: BUZZ_DEFAULTS,
 
@@ -251,7 +272,7 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
       try {
         r = await Relay.connect(env.relayUrl, { enableReconnect: true });
       } catch (err) {
-        throw networkError(`Buzz: could not connect to relay ${env.relayUrl}`, err);
+        throw networkError(`Buzz[${env.instance}]: could not connect to relay ${env.relayUrl}`, err);
       }
       relay = r;
 
@@ -261,7 +282,7 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
         // enableReconnect means this only fires once the library has given up
         // reconnecting on its own — a real "something is wrong" signal, not
         // routine noise.
-        log.warn('Buzz: relay connection closed', { relayUrl: env.relayUrl });
+        log.warn('Buzz: relay connection closed', { instance: env.instance, relayUrl: env.relayUrl });
       };
 
       await waitForAuth(r);
@@ -278,6 +299,7 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
 
       if (memberGroupIds.length === 0) {
         log.warn('Buzz: identity is not a member of any discovered group — connected but idle', {
+          instance: env.instance,
           relayUrl: env.relayUrl,
           pubkey,
         });
@@ -287,7 +309,9 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
       // messages from this point forward.
       lastSeenTs = Math.floor(Date.now() / 1000);
       inboundPollTimer = setInterval(() => {
-        pollInbound(config).catch((err) => log.warn('Buzz: inbound poll threw unexpectedly', { err }));
+        pollInbound(config).catch((err) =>
+          log.warn('Buzz: inbound poll threw unexpectedly', { instance: env.instance, err }),
+        );
       }, INBOUND_POLL_MS);
 
       // Defensive backstop for a known nostr-tools edge case: an error-flavored
@@ -297,14 +321,22 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
       // relay is actually down.
       healthCheckTimer = setInterval(() => {
         if (relay && !relay.connected) {
-          log.warn('Buzz: relay unexpectedly disconnected, attempting manual reconnect', { relayUrl: env.relayUrl });
+          log.warn('Buzz: relay unexpectedly disconnected, attempting manual reconnect', {
+            instance: env.instance,
+            relayUrl: env.relayUrl,
+          });
           relay.connect({ timeout: 10_000 }).catch((err) => {
-            log.error('Buzz: manual reconnect attempt failed', { err });
+            log.error('Buzz: manual reconnect attempt failed', { instance: env.instance, err });
           });
         }
       }, HEALTH_CHECK_MS);
 
-      log.info('Buzz: channel connected', { relayUrl: env.relayUrl, pubkey, groupCount: memberGroupIds.length });
+      log.info('Buzz: channel connected', {
+        instance: env.instance,
+        relayUrl: env.relayUrl,
+        pubkey,
+        groupCount: memberGroupIds.length,
+      });
     },
 
     async teardown(): Promise<void> {
@@ -379,27 +411,52 @@ const BUZZ_DEFAULTS: ChannelDefaults = {
   mentions: 'never',
 };
 
-registerChannelAdapter('buzz', {
-  factory: () => {
-    const envVars = readEnvFile(['BUZZ_RELAY_URL', 'BUZZ_NSEC']);
-    const relayUrl = process.env.BUZZ_RELAY_URL || envVars.BUZZ_RELAY_URL || '';
-    const nsec = process.env.BUZZ_NSEC || envVars.BUZZ_NSEC || '';
-    if (!relayUrl || !nsec) {
-      log.debug('Buzz: BUZZ_RELAY_URL/BUZZ_NSEC not set, skipping channel');
-      return null;
-    }
+/**
+ * Register one adapter instance per name listed in BUZZ_INSTANCES
+ * (comma-separated, e.g. "main,infra,fitness,realestate"). Each needs its
+ * own BUZZ_NSEC_<INSTANCE> (instance name upper-cased) — an instance with no
+ * matching nsec is skipped (logged, not fatal), same "factory returns null"
+ * convention every other channel adapter uses for missing credentials.
+ * BUZZ_RELAY_URL is shared across all instances (one relay).
+ */
+function registerBuzzInstances(): void {
+  const baseEnv = readEnvFile(['BUZZ_RELAY_URL', 'BUZZ_INSTANCES']);
+  const relayUrl = process.env.BUZZ_RELAY_URL || baseEnv.BUZZ_RELAY_URL || '';
+  const instancesRaw = process.env.BUZZ_INSTANCES || baseEnv.BUZZ_INSTANCES || '';
+  const instances = instancesRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-    let secretKey: Uint8Array;
-    try {
-      const decoded = nip19Decode(nsec);
-      if (decoded.type !== 'nsec') throw new Error(`expected an nsec1... key, got ${decoded.type}`);
-      secretKey = decoded.data;
-    } catch (err) {
-      log.error('Buzz: BUZZ_NSEC is not a valid nsec1... key, skipping channel', { err });
-      return null;
-    }
+  if (!relayUrl || instances.length === 0) {
+    log.debug('Buzz: BUZZ_RELAY_URL/BUZZ_INSTANCES not set, skipping channel');
+    return;
+  }
 
-    return createAdapter({ relayUrl, secretKey });
-  },
-  defaults: BUZZ_DEFAULTS,
-});
+  for (const instance of instances) {
+    const nsecKey = `BUZZ_NSEC_${instance.toUpperCase()}`;
+    registerChannelAdapter(`buzz-${instance}`, {
+      factory: () => {
+        const envVars = readEnvFile([nsecKey]);
+        const nsec = process.env[nsecKey] || envVars[nsecKey] || '';
+        if (!nsec) {
+          log.debug(`Buzz: ${nsecKey} not set, skipping instance`, { instance });
+          return null;
+        }
+        let secretKey: Uint8Array;
+        try {
+          const decoded = nip19Decode(nsec);
+          if (decoded.type !== 'nsec') throw new Error(`expected an nsec1... key, got ${decoded.type}`);
+          secretKey = decoded.data;
+        } catch (err) {
+          log.error(`Buzz: ${nsecKey} is not a valid nsec1... key, skipping instance`, { instance, err });
+          return null;
+        }
+        return createAdapter({ instance, relayUrl, secretKey });
+      },
+      defaults: BUZZ_DEFAULTS,
+    });
+  }
+}
+
+registerBuzzInstances();

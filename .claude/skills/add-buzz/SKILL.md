@@ -92,16 +92,20 @@ End-to-end delivery against a real relay is verified manually once the service i
 
 ## Credentials
 
-Buzz identity is a Nostr keypair. **This adapter never generates a key or requests channel membership** — it reuses an existing identity that's already been invited into the workspace and whatever channels it should read/post to. If you don't already have one, generate it with Buzz's own tooling (`buzz-admin generate-key` on the relay host, or any Nostr key generator) and have an admin add it as a workspace/channel member first — the adapter connecting with a fresh, non-member key will authenticate fine and then sit idle (see Troubleshooting).
+Buzz identity is a Nostr keypair — **one per persona/agent group, not one shared identity for the whole install.** A shared identity means Buzz can't tell which persona is actually replying (every reply renders under the same name), so this adapter is multi-instance from the start. **It never generates a key or requests membership** — each instance reuses an existing identity that's already added as a workspace member (`buzz-admin add-member`, gates NIP-42 auth itself — a non-member key fails to authenticate at all, not just "sits idle") and invited to whatever channel(s) it should read/post to (separate, channel-level membership — see Troubleshooting for the two-tier distinction).
 
 Add to `.env`:
 
 ```bash
-BUZZ_RELAY_URL=ws://10.0.99.13:3000   # your relay's websocket URL
-BUZZ_NSEC=nsec1...                     # existing identity's private key, bech32 form
+BUZZ_RELAY_URL=ws://10.0.99.13:3000        # shared relay websocket URL, one for all instances
+BUZZ_INSTANCES=main,infra,fitness,realestate  # comma-separated instance names — pick whatever fits your agent groups
+BUZZ_NSEC_MAIN=nsec1...                     # one BUZZ_NSEC_<INSTANCE> per name in BUZZ_INSTANCES
+BUZZ_NSEC_INFRA=nsec1...
+BUZZ_NSEC_FITNESS=nsec1...
+BUZZ_NSEC_REALESTATE=nsec1...
 ```
 
-**`BUZZ_NSEC` is a private key — treat it like any other credential.** The adapter decodes the bech32 `nsec1...` form internally (`nostr-tools/nip19`); don't convert it to hex yourself.
+**Every `BUZZ_NSEC_*` is a private key — treat it like any other credential.** The adapter decodes the bech32 `nsec1...` form internally (`nostr-tools/nip19`); don't convert it to hex yourself. An instance listed in `BUZZ_INSTANCES` with no matching `BUZZ_NSEC_<INSTANCE>` is skipped (logged, not fatal) — same convention every other channel adapter uses for missing credentials.
 
 ### Restart
 
@@ -121,13 +125,13 @@ The adapter connects, authenticates, and discovers which channels the identity i
 grep buzz logs/nanoclaw.log | grep -E "channel connected|metadata discovered"
 ```
 
-**`onMetadata` doesn't create a `messaging_groups` row by itself** (true for every native adapter, not buzz-specific — it only logs). Normally a channel becomes wireable after its first real inbound message that's a **mention** — but confirmed against real Buzz clients (desktop UI): an `@mention` is literal text in the message, not a `p` tag, so `isMention` never fires and auto-registration never triggers. **In practice, always pre-create the `messaging_groups` row and wiring manually** rather than waiting on a first message:
+**`onMetadata` doesn't create a `messaging_groups` row by itself** (true for every native adapter, not buzz-specific — it only logs). Normally a channel becomes wireable after its first real inbound message that's a **mention** — but confirmed against real Buzz clients (desktop UI): an `@mention` is literal text in the message, not a `p` tag, so `isMention` never fires and auto-registration never triggers. **In practice, always pre-create the `messaging_groups` row and wiring manually** rather than waiting on a first message. `--instance` must be `buzz-<name>` matching whichever `BUZZ_INSTANCES` entry discovered that channel (check the log line's own context — each instance logs its discoveries separately) — the same real Buzz channel can have a separate `messaging_groups` row per instance, since different personas are different Buzz participants even when they're in the same channel:
 
 ```bash
 ncl messaging-groups create \
   --channel-type buzz \
   --platform-id buzz:<channel-uuid> \
-  --instance buzz \
+  --instance buzz-<name> \
   --name <channel-name> \
   --is-group 1
 
@@ -140,21 +144,25 @@ ncl wirings create \
 
 ## Identity actions (`ncl buzz`)
 
-Beyond channel messaging, `ncl buzz set-profile` lets a wired agent update the shared Buzz identity's display name/about/avatar directly — see `docs/buzz-mcp-tooling-spec.md` for the fuller planned tool surface (reactions, search, DM send, channel admin) this is the first entry in.
+Beyond channel messaging, `ncl buzz set-profile` lets an agent update its *own* Buzz persona's display name/about/avatar directly — see `docs/buzz-mcp-tooling-spec.md` for the fuller planned tool surface (reactions, search, DM send, channel admin) this is the first entry in.
 
 ```bash
+# From an agent (container transport) — always targets that agent group's own wired instance:
 ncl buzz set-profile --name "Mycroft" --about "Infra & ops. Old graybeard sysadmin."
+
+# From the host/operator (socket transport) — no agent-group context, --instance is required:
+ncl buzz set-profile --instance infra --name "Mycroft"
 ```
 
-Only callers whose agent group has a Buzz channel wired can reach it — an agent group with no Buzz relationship gets a clear error, not a silent no-op. It fetches the current profile and merges rather than overwriting (kind:0 is a Nostr *replaceable* event — a naive publish of only the passed fields would erase everything else already set), and verifies the publish actually landed on the relay before reporting success.
+An agent caller's target identity is derived from its own wiring — it can't pass `--instance` to reach a different persona's identity. Only callers whose agent group has a Buzz channel wired can reach the command at all — an agent group with no Buzz relationship gets a clear error, not a silent no-op; an agent group wired to more than one Buzz instance also errors (ambiguous, not expected under the current one-instance-per-agent-group design). It fetches the current profile and merges rather than overwriting (kind:0 is a Nostr *replaceable* event — a naive publish of only the passed fields would erase everything else already set), and verifies the publish actually landed on the relay before reporting success.
 
 **Manual verification** once the service is running:
 
 ```bash
-ncl buzz set-profile --name "<test name>"
+ncl buzz set-profile --instance <name> --name "<test name>"
 ```
 
-Then confirm on the relay directly (or in a Buzz client) that the identity's displayed name changed, and that `about`/`picture` (if previously set) are still intact.
+Then confirm on the relay directly (or in a Buzz client) that that identity's displayed name changed, and that `about`/`picture` (if previously set) are still intact.
 
 ## Next Steps
 
