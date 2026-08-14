@@ -26,6 +26,7 @@ Run `ncl help` for the full list. Common resources:
 | members      | list, add, remove                                                                                                                         | Unprivileged access gate for an agent group             |
 | tasks        | list, get, create, update, cancel, pause, resume, delete, append-log                                                                      | Scheduled tasks for your agent group                    |
 | wirings      | get, update                                                                                                                               | Response policy for the current chat                    |
+| buzz         | set-profile                                                                                                                               | Buzz (Nostr) identity actions — only if your group has a Buzz channel wired |
 
 Additional resources (available under `global` scope only): messaging-groups, users, roles, user-dms, dropped-messages, approvals.
 

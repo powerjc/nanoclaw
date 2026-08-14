@@ -22,24 +22,48 @@ Skip to **Credentials** if all of these are already in place:
 - `src/channels/buzz.ts` exists
 - `src/channels/buzz-registration.test.ts` and `src/channels/buzz.test.ts` exist
 - `src/channels/index.ts` contains `import './buzz.js';`
+- `src/cli/resources/buzz.ts` exists
+- `src/cli/resources/index.ts` contains `import './buzz.js';`
+- `GROUP_SCOPE_RESOURCES` in `src/cli/registry.ts` contains `'buzz'`
 - `nostr-tools` and `ws` are listed in `package.json` dependencies
 
 Otherwise continue. Every step below is safe to re-run.
 
-### 1. Copy the adapter and its tests
+### 1. Copy the adapter, its tests, and the `ncl buzz` resource
 
 ```bash
 cp .claude/skills/add-buzz/resources/buzz.ts src/channels/buzz.ts
 cp .claude/skills/add-buzz/resources/buzz-registration.test.ts src/channels/buzz-registration.test.ts
 cp .claude/skills/add-buzz/resources/buzz.test.ts src/channels/buzz.test.ts
+cp .claude/skills/add-buzz/resources/cli-buzz.ts src/cli/resources/buzz.ts
 ```
 
-### 2. Append the self-registration import
+`cli-buzz.ts` → `src/cli/resources/buzz.ts` is the `ncl buzz set-profile` command — a separate concern from the channel adapter (this one signs/publishes host-side using `BUZZ_NSEC`, invoked by agents via `ncl`, not through channel message delivery). Named `cli-buzz.ts` in this skill's `resources/` only to avoid colliding with the channel adapter's own `buzz.ts` in the same directory; the installed filename matches every other `ncl` resource's convention (`src/cli/resources/<plural>.ts`).
+
+### 2. Append the self-registration imports
 
 Append to `src/channels/index.ts` (skip if already present):
 
 ```typescript
 import './buzz.js';
+```
+
+Append to `src/cli/resources/index.ts` (skip if already present):
+
+```typescript
+import './buzz.js';
+```
+
+Add `'buzz'` to `GROUP_SCOPE_RESOURCES` in `src/cli/registry.ts` (skip if already present) — without this, `cli_scope: 'group'` agents (the default for non-owner agent groups) can't reach `ncl buzz`, only `global`-scope ones can:
+
+```typescript
+export const GROUP_SCOPE_RESOURCES = new Set(['groups', 'sessions', 'destinations', 'members', 'tasks', 'buzz']);
+```
+
+Add a `buzz` row to the resource table in `container/agent-runner/src/mcp-tools/cli.instructions.md` (this is what's actually injected into every agent's context — without it, agents won't know the command exists short of running `ncl help` unprompted) and, for operator parity, the mirrored table in root `CLAUDE.md`:
+
+```
+| buzz | set-profile | Buzz (Nostr) identity actions for the shared BUZZ_NSEC identity |
 ```
 
 ### 3. Install dependencies (pinned exact versions)
@@ -61,6 +85,8 @@ pnpm exec vitest run src/channels/buzz-registration.test.ts src/channels/buzz.te
 ```
 
 `buzz-registration.test.ts` imports the real channel barrel and asserts the registry contains `buzz` — it goes red if the barrel import is deleted/drifts, or if `nostr-tools`/`ws` aren't installed (the import throws), so it also covers the dependency from step 3. `buzz.test.ts` is the behavioral test: fakes the `ws` transport and exercises the real (unmocked) `nostr-tools` library against it — NIP-42 handshake, group discovery/membership filtering, echo-skip, mention detection, `deliver()`'s event shape, and the `NetworkError` tagging that gets a connection failure retried by `channel-registry.ts`. Importing the barrel is safe: `buzz.ts` only connects to the relay inside `setup()` (run at host startup), never at import.
+
+`src/cli/resources/buzz.ts` (the `ncl buzz` command) has no dedicated test yet — `pnpm exec tsc --noEmit` above is the only thing exercising it; it's covered structurally by the same `nostr-tools`/`ws` import-throws-if-missing behavior as the channel adapter, but nothing asserts `ncl buzz set-profile` actually works end-to-end short of the manual verification below.
 
 End-to-end delivery against a real relay is verified manually once the service is running — see Wiring and Troubleshooting.
 
@@ -111,6 +137,24 @@ ncl wirings create \
 ```
 
 `<channel-uuid>` comes from `grep "Channel metadata discovered" logs/nanoclaw.log | grep buzz`. The declared default engage mode is `pattern` matching the agent's name (see Channel Info) — override with `--engage-mode pattern --engage-pattern '.'` at wiring time for always-on, if the channel is low-traffic enough that a name pattern isn't worth requiring.
+
+## Identity actions (`ncl buzz`)
+
+Beyond channel messaging, `ncl buzz set-profile` lets a wired agent update the shared Buzz identity's display name/about/avatar directly — see `docs/buzz-mcp-tooling-spec.md` for the fuller planned tool surface (reactions, search, DM send, channel admin) this is the first entry in.
+
+```bash
+ncl buzz set-profile --name "Mycroft" --about "Infra & ops. Old graybeard sysadmin."
+```
+
+Only callers whose agent group has a Buzz channel wired can reach it — an agent group with no Buzz relationship gets a clear error, not a silent no-op. It fetches the current profile and merges rather than overwriting (kind:0 is a Nostr *replaceable* event — a naive publish of only the passed fields would erase everything else already set), and verifies the publish actually landed on the relay before reporting success.
+
+**Manual verification** once the service is running:
+
+```bash
+ncl buzz set-profile --name "<test name>"
+```
+
+Then confirm on the relay directly (or in a Buzz client) that the identity's displayed name changed, and that `about`/`picture` (if previously set) are still intact.
 
 ## Next Steps
 
@@ -189,6 +233,14 @@ If no row exists, create and wire it manually (Wiring section above). If a row e
 ```bash
 ncl wirings update <wiring-id> --engage-mode pattern --engage-pattern '.'
 ```
+
+### `ncl buzz set-profile` fails with "no Buzz channel wired"
+
+The calling agent group has no `messaging_groups` row with `channel_type='buzz'` wired to it (see Wiring). This is enforced deliberately — the command is globally registered (every agent group's container has it available), but only agent groups with an actual Buzz relationship can use it.
+
+### `ncl buzz set-profile` fails with "could not be confirmed on the relay"
+
+The publish call succeeded but the follow-up read-back found nothing — either a relay hiccup (retry) or a sign of the same kind of protocol-behavior mismatch already found twice with this relay (mention tagging, live subscription push). Worth a manual check against the relay directly if it recurs.
 
 ### File attachments silently missing
 
