@@ -167,10 +167,10 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
     const groupId = event.tags.find((t) => t[0] === 'h')?.[1];
     if (!groupId || !groups.has(groupId)) return;
 
-    // Standard Nostr mention convention (not documented by Buzz specifically):
-    // a `p` tag naming our pubkey. Unverified against real Buzz traffic — if
-    // this doesn't hold up in practice, switch `mentions` to 'never' below and
-    // fall back to name-pattern engagement like deltachat.ts.
+    // Standard Nostr mention convention (a `p` tag naming our pubkey) — kept as
+    // informational metadata on the message, but NOT declared reliable
+    // (BUZZ_DEFAULTS.mentions = 'never'): confirmed against real Buzz clients
+    // that "@mention" is literal text in `content`, not a `p` tag.
     const isMention = event.tags.some((t) => t[0] === 'p' && t[1] === pubkey) || undefined;
     const senderLabel = memberLabels.get(groupId)?.get(event.pubkey);
 
@@ -301,7 +301,17 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
  * 'request_approval' if real traffic shows other, non-NanoClaw-registered
  * humans posting in shared channels.
  *
- * group.engageMode is 'mention', not 'mention-sticky': buzz has one shared
+ * mentions: 'never' — confirmed against real Buzz clients (desktop UI), not
+ * just theorized: an "@mention" is literal text in `content`, not a `p` tag.
+ * handleInboundEvent still computes isMention from a p-tag match (harmless,
+ * and correct if some other Buzz client ever does tag properly), but the
+ * declared default can't rely on it — group engagement falls back to a
+ * name pattern instead, same shape as deltachat.ts's own no-mention-metadata
+ * case. 'never' also makes validateEngageAgainstChannel reject `mention`/
+ * `mention-sticky` wirings on this channel, which is the correct guard since
+ * they'd never fire.
+ *
+ * group.engageMode is 'pattern', not 'mention-sticky': buzz has one shared
  * session per channel (supportsThreads: false), so sticky would mean
  * "engaged forever" after the first trigger.
  *
@@ -310,8 +320,8 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
  */
 const BUZZ_DEFAULTS: ChannelDefaults = {
   dm: { engageMode: 'pattern', engagePattern: '.', threads: false, unknownSenderPolicy: 'strict' },
-  group: { engageMode: 'mention', threads: false, unknownSenderPolicy: 'strict' },
-  mentions: 'platform',
+  group: { engageMode: 'pattern', engagePattern: '\\b{name}\\b', threads: false, unknownSenderPolicy: 'strict' },
+  mentions: 'never',
 };
 
 registerChannelAdapter('buzz', {

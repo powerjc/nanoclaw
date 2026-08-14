@@ -95,19 +95,22 @@ The adapter connects, authenticates, and discovers which channels the identity i
 grep buzz logs/nanoclaw.log | grep -E "channel connected|metadata discovered"
 ```
 
-**`onMetadata` doesn't create a `messaging_groups` row by itself** (true for every native adapter, not buzz-specific — it only logs). A channel becomes wireable only after its first real inbound message. Post one message into the target Buzz channel from another client, then:
+**`onMetadata` doesn't create a `messaging_groups` row by itself** (true for every native adapter, not buzz-specific — it only logs). Normally a channel becomes wireable after its first real inbound message that's a **mention** — but confirmed against real Buzz clients (desktop UI): an `@mention` is literal text in the message, not a `p` tag, so `isMention` never fires and auto-registration never triggers. **In practice, always pre-create the `messaging_groups` row and wiring manually** rather than waiting on a first message:
 
 ```bash
-pnpm exec tsx scripts/q.ts data/v2.db "SELECT platform_id, name FROM messaging_groups WHERE channel_type='buzz'"
+ncl messaging-groups create \
+  --channel-type buzz \
+  --platform-id buzz:<channel-uuid> \
+  --instance buzz \
+  --name <channel-name> \
+  --is-group 1
+
+ncl wirings create \
+  --messaging-group-id <mg-id-from-above> \
+  --agent-group-id <ag-id>
 ```
 
-Wire it with `/manage-channels`, or directly:
-
-```bash
-ncl wirings create --messaging-group-id <mg-id> --agent-group-id <ag-id>
-```
-
-The declared default engage mode is `mention` — tag the identity's pubkey in a `p` tag to trigger it (see Channel Info). This is a standard Nostr convention, not something Buzz documents explicitly — confirm it actually fires on real traffic; if it doesn't, see Troubleshooting for the fallback.
+`<channel-uuid>` comes from `grep "Channel metadata discovered" logs/nanoclaw.log | grep buzz`. The declared default engage mode is `pattern` matching the agent's name (see Channel Info) — override with `--engage-mode pattern --engage-pattern '.'` at wiring time for always-on, if the channel is low-traffic enough that a name pattern isn't worth requiring.
 
 ## Next Steps
 
@@ -123,7 +126,7 @@ Otherwise, run `/manage-channels` to wire a Buzz channel to an agent group once 
 - **platform-id-format**: `buzz:<channel-uuid>` (the NIP-29 group's `d`-tag identifier)
 - **user-id-format**: `buzz:<pubkey-hex>`
 - **how-to-find-id**: query `messaging_groups` as shown above, after a first message has been posted in the target channel
-- **mentions**: `platform` — a `kind:9` event's `p` tag naming the identity's pubkey sets `isMention: true`
+- **mentions**: `never` — real Buzz clients put `@mentions` in message text, not `p` tags, so platform mention detection isn't reliable (see Wiring). Group engagement defaults to a name-pattern match instead.
 - **default-isolation**: one agent per Buzz identity/relay is the simplest model — multiple channels the identity belongs to can share an agent group, or be wired to separate ones, same tradeoff as any other multi-channel adapter
 
 ### Not supported (MVP)
@@ -175,16 +178,16 @@ If this fires repeatedly without recovering, the relay itself is likely down —
 
 ### Messages received but agent not responding
 
-The messaging group exists but may not be wired, or the mention convention didn't fire as expected:
+The messaging group probably isn't wired — auto-registration needs a mention, which real Buzz clients don't reliably produce (see Wiring). Check:
 
 ```bash
 pnpm exec tsx scripts/q.ts data/v2.db "SELECT id, platform_id, name FROM messaging_groups WHERE channel_type='buzz'"
 ```
 
-If unwired, use `/manage-channels`. If wired with `mention` engage mode but never triggering, the `p`-tag mention convention (unverified against real Buzz clients — see the adapter's header comment) may not hold for your Buzz client; switch the wiring's engage mode to `pattern` with the agent's name as a fallback:
+If no row exists, create and wire it manually (Wiring section above). If a row exists but engagement never triggers, the default `pattern` engage mode requires the agent's name to appear in the message; switch to always-on for a low-traffic channel:
 
 ```bash
-ncl wirings update <wiring-id> --engage-mode pattern --engage-pattern '\\b<agent-name>\\b'
+ncl wirings update <wiring-id> --engage-mode pattern --engage-pattern '.'
 ```
 
 ### File attachments silently missing
