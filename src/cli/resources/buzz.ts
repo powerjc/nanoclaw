@@ -68,17 +68,29 @@ async function loadIdentity(instance: string): Promise<BuzzIdentity | null> {
  * Which Buzz identity this call targets, and the authorization check that
  * goes with it. An explicit `--instance` is honored only for host callers
  * (the operator, via the CLI socket — no agent group to scope to). An agent
- * caller's instance is always derived from its own wiring, never from
- * `--instance` — an agent group wired to `buzz-fitness` cannot pass
- * `--instance realestate` and reach a different persona's identity. Denies
- * outright if the calling agent group has no Buzz channel wired at all, or
- * is wired to more than one Buzz instance (ambiguous — not expected under
- * today's one-instance-per-agent-group design, fails closed rather than
- * guessing).
+ * caller's instance is always derived from its own wiring, never trusted
+ * from `--instance` — an agent group wired to `buzz-fitness` cannot pass
+ * `--instance realestate` and reach a different persona's identity.
+ *
+ * CONFIRMED FOOTGUN, fixed here: an earlier version silently discarded
+ * `--instance` for agent callers instead of rejecting a mismatch — an agent
+ * passing `--instance main` got no error, just its own wired identity back,
+ * with zero signal anything was off. Live-tested consequence: three
+ * in-agent calls each silently redirected to the infra identity and
+ * overwrote its profile three times in a row, while main/fitness/realestate
+ * silently never got touched. Passing `--instance` as an agent is now only
+ * valid when it names the caller's own resolved instance (redundant but
+ * harmless); anything else is a hard error, never a silent redirect.
+ *
+ * Denies outright if the calling agent group has no Buzz channel wired at
+ * all, or is wired to more than one Buzz instance (ambiguous — not expected
+ * under today's one-instance-per-agent-group design, fails closed rather
+ * than guessing).
  */
-function resolveInstance(args: Record<string, unknown>, ctx: CallerContext): string {
+export function resolveInstance(args: Record<string, unknown>, ctx: CallerContext): string {
+  const explicit = args.instance as string | undefined;
+
   if (ctx.caller === 'host') {
-    const explicit = args.instance as string | undefined;
     if (!explicit) {
       throw new Error(
         '--instance is required when calling ncl buzz from the host (no agent group context to infer it from)',
@@ -99,7 +111,13 @@ function resolveInstance(args: Record<string, unknown>, ctx: CallerContext): str
       `this agent group is wired to multiple Buzz identities (${[...instances].join(', ')}) — this shouldn't happen under the current one-instance-per-agent-group design; check the wiring`,
     );
   }
-  return [...instances][0];
+  const own = [...instances][0];
+  if (explicit !== undefined && explicit !== own) {
+    throw new Error(
+      `this agent group's Buzz identity is "${own}" — you cannot target another persona's identity ("${explicit}") from here. Omit --instance or pass --instance ${own}.`,
+    );
+  }
+  return own;
 }
 
 /** Bounded retry against the "no challenge was received yet" race — see
@@ -158,7 +176,7 @@ registerResource({
     'set-profile': {
       access: 'open',
       description:
-        "Update this identity's Buzz profile (display name / about / avatar). Reads the current profile first and merges — does not erase fields you don't pass. Agent callers always target their own wired identity; --instance is for host/operator calls only.",
+        "Update this identity's Buzz profile (display name / about / avatar). Reads the current profile first and merges — does not erase fields you don't pass. Agent callers always target their own wired identity — --instance is required for host/operator calls, and for agent callers is only valid if it matches their own identity (anything else is a hard error, never a silent redirect to the wrong one).",
       args: [
         { name: 'name', type: 'string', description: 'Display name' },
         { name: 'about', type: 'string', description: 'Bio / about text' },
@@ -166,7 +184,8 @@ registerResource({
         {
           name: 'instance',
           type: 'string',
-          description: 'Which Buzz identity (host/operator calls only — agents always use their own wired identity)',
+          description:
+            'Which Buzz identity. Required for host/operator calls. For agent callers: omit it, or pass it matching your own wired identity — passing a different one errors rather than silently targeting your own.',
         },
       ],
       examples: [
