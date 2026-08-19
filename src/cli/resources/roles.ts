@@ -31,9 +31,15 @@ registerResource({
       access: 'approval',
       description: 'Grant a role. Use --user, --role, and optionally --group for scoped admin.',
       handler: async (args) => {
-        const userId = args.user as string;
+        // Accept both --user/--group (documented in this verb's description)
+        // and --user-id/--agent-group-id (what the auto-generated Fields
+        // section below lists, derived from the generic column names) —
+        // custom operations don't otherwise go through the generic
+        // column-to-flag mapping, so the two help sections disagreed on the
+        // actual flag name until this aliasing was added.
+        const userId = (args.user as string) ?? (args.user_id as string);
         const role = args.role as string;
-        const groupId = (args.group as string) ?? null;
+        const groupId = (args.group as string) ?? (args.agent_group_id as string) ?? null;
         const grantedBy = (args.granted_by as string) ?? null;
         if (!userId) throw new Error('--user is required');
         if (!role || !['owner', 'admin'].includes(role)) throw new Error('--role must be owner or admin');
@@ -51,9 +57,10 @@ registerResource({
       access: 'approval',
       description: 'Revoke a role. Use --user, --role, and --group if scoped.',
       handler: async (args) => {
-        const userId = args.user as string;
+        // See the aliasing note in `grant` above — same --user-id/--group-id fallback.
+        const userId = (args.user as string) ?? (args.user_id as string);
         const role = args.role as string;
-        const groupId = (args.group as string) ?? null;
+        const groupId = (args.group as string) ?? (args.agent_group_id as string) ?? null;
         if (!userId) throw new Error('--user is required');
         if (!role) throw new Error('--role is required');
         const result = getDb()
