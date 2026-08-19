@@ -323,6 +323,137 @@ describe('deliverSessionMessages — instance resolution', () => {
     await deliverSessionMessages(session);
     expect(instances).toEqual(['telegram']);
   });
+
+  // Regression (buzz relay reconfig, 2026-08-19): a session with NO origin on
+  // the target channel at all (e.g. a Telegram-origin session sending a
+  // <message to="buzz-infra">) used to fall through to the ambiguous
+  // by-platform lookup, which is default-instance-first — landing on the
+  // unregistered default 'buzz' instance instead of 'infra' and dying with
+  // MissingChannelAdapterError. The container now records which instance a
+  // named destination resolved to (destinations.instance → messages_out.instance)
+  // so this case resolves exactly instead of guessing.
+  it('honors an explicit msg.instance even when the session has no origin on that channel', async () => {
+    createAgentGroup({ id: 'ag-1', name: 'Test Agent', folder: 'test-agent', agent_provider: null, created_at: now() });
+    createMessagingGroup({
+      id: 'mg-buzz-default',
+      channel_type: 'buzz',
+      platform_id: 'buzz:general',
+      name: 'general',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-buzz-infra',
+      channel_type: 'buzz',
+      platform_id: 'buzz:general',
+      instance: 'infra',
+      name: 'general',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    // Origin is a Telegram session — no relation to either buzz row.
+    createMessagingGroup({
+      id: 'mg-telegram',
+      channel_type: 'telegram',
+      platform_id: 'telegram:999',
+      name: 'Telegram origin',
+      is_group: 0,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    // Grant ag-1 an explicit destination onto the infra instance (this is
+    // what makes it a legal cross-channel send at all).
+    createMessagingGroupAgent({
+      id: 'mga-1',
+      messaging_group_id: 'mg-buzz-infra',
+      agent_group_id: 'ag-1',
+      engage_mode: 'mention',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+    const { session } = resolveSession('ag-1', 'mg-telegram', null, 'shared');
+    const db = new Database(outboundDbPath('ag-1', session.id));
+    db.prepare(
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, instance, content)
+       VALUES ('out-cross-channel', datetime('now'), 'chat', 'buzz:general', 'buzz', 'infra', ?)`,
+    ).run(JSON.stringify({ text: 'hello world' }));
+    db.close();
+
+    const instances: Array<string | undefined> = [];
+    setDeliveryAdapter({
+      async deliver(_ct, _pid, _tid, _kind, _content, _files, instance) {
+        instances.push(instance);
+        return 'plat-3';
+      },
+    });
+
+    await deliverSessionMessages(session);
+    expect(instances).toEqual(['infra']);
+  });
+
+  it('honors msg.instance over the origin instance when they disagree on the same platform_id', async () => {
+    createAgentGroup({ id: 'ag-1', name: 'Test Agent', folder: 'test-agent', agent_provider: null, created_at: now() });
+    createMessagingGroup({
+      id: 'mg-default',
+      channel_type: 'slack',
+      platform_id: 'slack:C1',
+      name: 'Default',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    createMessagingGroup({
+      id: 'mg-tester',
+      channel_type: 'slack',
+      platform_id: 'slack:C1',
+      instance: 'alpha-tester',
+      name: 'Tester',
+      is_group: 1,
+      unknown_sender_policy: 'public',
+      created_at: now(),
+    });
+    // Grant ag-1 an explicit destination onto the default-instance row (the
+    // session's origin is mg-tester, a different messaging group).
+    createMessagingGroupAgent({
+      id: 'mga-1',
+      messaging_group_id: 'mg-default',
+      agent_group_id: 'ag-1',
+      engage_mode: 'mention',
+      engage_pattern: null,
+      sender_scope: 'all',
+      ignored_message_policy: 'drop',
+      session_mode: 'shared',
+      priority: 0,
+      created_at: now(),
+    });
+    // Session origin is mg-tester (alpha-tester) — but the agent explicitly
+    // targeted the default-instance destination, which shares the same
+    // platform_id. Origin-priority must not override the explicit instance.
+    const { session } = resolveSession('ag-1', 'mg-tester', null, 'shared');
+    const db = new Database(outboundDbPath('ag-1', session.id));
+    db.prepare(
+      `INSERT INTO messages_out (id, timestamp, kind, platform_id, channel_type, instance, content)
+       VALUES ('out-disagree', datetime('now'), 'chat', 'slack:C1', 'slack', 'slack', ?)`,
+    ).run(JSON.stringify({ text: 'hi' }));
+    db.close();
+
+    const instances: Array<string | undefined> = [];
+    setDeliveryAdapter({
+      async deliver(_ct, _pid, _tid, _kind, _content, _files, instance) {
+        instances.push(instance);
+        return 'plat-4';
+      },
+    });
+
+    await deliverSessionMessages(session);
+    expect(instances).toEqual(['slack']);
+  });
 });
 
 describe('deliverSessionMessages — permission check', () => {

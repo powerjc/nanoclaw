@@ -61,18 +61,33 @@ export interface DestinationRow {
   channel_type: string | null;
   platform_id: string | null;
   agent_group_id: string | null;
+  instance: string | null;
 }
 
 export function replaceDestinations(db: Database.Database, entries: DestinationRow[]): void {
   const tx = db.transaction((rows: DestinationRow[]) => {
     db.prepare('DELETE FROM destinations').run();
     const stmt = db.prepare(
-      `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id)
-       VALUES (@name, @display_name, @type, @channel_type, @platform_id, @agent_group_id)`,
+      `INSERT INTO destinations (name, display_name, type, channel_type, platform_id, agent_group_id, instance)
+       VALUES (@name, @display_name, @type, @channel_type, @platform_id, @agent_group_id, @instance)`,
     );
     for (const row of rows) stmt.run(row);
   });
   tx(entries);
+}
+
+/** Ensure the destinations table has columns added after initial schema. */
+export function migrateDestinationsTable(db: Database.Database): void {
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info('destinations')").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!cols.has('instance')) {
+    // Lets outbound sends disambiguate destinations that share a
+    // (channel_type, platform_id) across adapter instances (e.g. Buzz's
+    // per-identity NIP-29 groups). NULL on pre-existing rows is fine —
+    // the table is fully rewritten by replaceDestinations on every wake.
+    db.prepare('ALTER TABLE destinations ADD COLUMN instance TEXT').run();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +267,10 @@ export interface OutboundMessage {
   platform_id: string | null;
   channel_type: string | null;
   thread_id: string | null;
+  /** Adapter-instance the container resolved the destination to at send time.
+   *  undefined on outbound.db files predating this column (SELECT * simply
+   *  omits it) — delivery.ts treats that the same as null. */
+  instance?: string | null;
   content: string;
   in_reply_to: string | null;
 }

@@ -776,6 +776,7 @@ function sendToDestination(dest: DestinationEntry, body: string, routing: Routin
     platform_id: platformId,
     channel_type: channelType,
     thread_id: destRouting?.threadId ?? null,
+    instance: dest.type === 'channel' ? (dest.instance ?? null) : null,
     content: JSON.stringify({ text: body }),
   });
 }

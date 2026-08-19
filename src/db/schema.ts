@@ -210,7 +210,13 @@ CREATE TABLE IF NOT EXISTS destinations (
   type            TEXT NOT NULL,   -- 'channel' | 'agent'
   channel_type    TEXT,            -- for type='channel'
   platform_id     TEXT,            -- for type='channel'
-  agent_group_id  TEXT             -- for type='agent'
+  agent_group_id  TEXT,            -- for type='agent'
+  instance        TEXT             -- for type='channel': the messaging_group's
+                                    -- adapter-instance name. Multiple instances of
+                                    -- the same channel_type can share a platform_id
+                                    -- (e.g. Buzz's per-identity NIP-29 groups), so
+                                    -- this is what lets outbound sends disambiguate
+                                    -- which instance a named destination means.
 );
 
 -- Current chat/thread routing for this session. Single-row table (id=1).
@@ -239,6 +245,11 @@ CREATE TABLE IF NOT EXISTS messages_out (
   platform_id    TEXT,
   channel_type   TEXT,
   thread_id      TEXT,
+  instance       TEXT,   -- adapter-instance name the destination was resolved to
+                          -- at send time (see destinations.instance). NULL for
+                          -- rows written before this column existed, or for
+                          -- destinations with no instance ambiguity — delivery.ts
+                          -- falls back to its default-instance-first lookup.
   content        TEXT NOT NULL
 );
 

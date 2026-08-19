@@ -388,6 +388,17 @@ function createAdapter(env: BuzzEnv): ChannelAdapter {
  * 'request_approval' if real traffic shows other, non-NanoClaw-registered
  * humans posting in shared channels.
  *
+ * Multi-instance note: sibling instances (e.g. main/infra/fitness/realestate)
+ * can share membership in the same underlying Buzz group. True self-echo is
+ * already excluded at the protocol layer (handleInboundEvent's `event.pubkey
+ * === pubkey` check below) — this policy is NOT what's preventing an instance
+ * from reacting to its own posts. What 'strict' currently also happens to
+ * block is CROSS-BOT chatter: instance A's agent seeing instance B's posts in
+ * a shared group, since B's pubkey isn't a registered NanoClaw user either. If
+ * this policy is ever loosened, decide that case deliberately (e.g. an
+ * explicit sibling-pubkey exclusion list) rather than relying on 'strict' to
+ * have been doing it by accident.
+ *
  * mentions: 'never' — confirmed against real Buzz clients (desktop UI), not
  * just theorized: an "@mention" is literal text in `content`, not a `p` tag.
  * handleInboundEvent still computes isMention from a p-tag match (harmless,

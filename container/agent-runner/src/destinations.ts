@@ -19,6 +19,10 @@ export interface DestinationEntry {
   channelType?: string;
   platformId?: string;
   agentGroupId?: string;
+  /** Adapter-instance for type='channel' — disambiguates destinations that
+   *  share a (channelType, platformId) across instances (e.g. Buzz's
+   *  per-identity NIP-29 groups). Undefined for single-instance channels. */
+  instance?: string;
 }
 
 export type SessionMode = { kind: 'chat' } | { kind: 'task'; taskId: string };
@@ -30,6 +34,7 @@ interface DestRow {
   channel_type: string | null;
   platform_id: string | null;
   agent_group_id: string | null;
+  instance: string | null;
 }
 
 function rowToEntry(row: DestRow): DestinationEntry {
@@ -40,6 +45,7 @@ function rowToEntry(row: DestRow): DestinationEntry {
     channelType: row.channel_type ?? undefined,
     platformId: row.platform_id ?? undefined,
     agentGroupId: row.agent_group_id ?? undefined,
+    instance: row.instance ?? undefined,
   };
 }
 

@@ -112,6 +112,16 @@ export function getOutboundDb(): Database {
         updated_at               TEXT NOT NULL
       );
     `);
+    // messages_out.instance: adapter-instance the destination was resolved to
+    // at send time. Forward-compat for outbound.db files created before this
+    // column existed — host-side delivery falls back to its old resolution
+    // when the column (or the value) is absent, so this is safe to add lazily.
+    const messagesOutCols = new Set(
+      (_outbound.prepare("PRAGMA table_info('messages_out')").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!messagesOutCols.has('instance')) {
+      _outbound.exec(`ALTER TABLE messages_out ADD COLUMN instance TEXT`);
+    }
   }
   return _outbound;
 }
@@ -215,7 +225,8 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
       type            TEXT NOT NULL,
       channel_type    TEXT,
       platform_id     TEXT,
-      agent_group_id  TEXT
+      agent_group_id  TEXT,
+      instance        TEXT
     );
   `);
 
@@ -233,6 +244,7 @@ export function initTestSessionDb(): { inbound: Database; outbound: Database } {
       platform_id    TEXT,
       channel_type   TEXT,
       thread_id      TEXT,
+      instance       TEXT,
       content        TEXT NOT NULL
     );
     CREATE TABLE processing_ack (

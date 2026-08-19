@@ -46,9 +46,15 @@ function destinationList(): string {
  * preserved so replies land in the correct thread. Otherwise thread_id
  * is null (a cross-destination send starts a new conversation).
  */
-function resolveRouting(
-  to: string,
-): { channel_type: string; platform_id: string; thread_id: string | null; resolvedName: string } | { error: string } {
+function resolveRouting(to: string):
+  | {
+      channel_type: string;
+      platform_id: string;
+      thread_id: string | null;
+      instance: string | null;
+      resolvedName: string;
+    }
+  | { error: string } {
   const dest = findByName(to);
   if (!dest) return { error: `Unknown destination "${to}". Known: ${destinationList()}` };
   if (dest.type === 'channel') {
@@ -61,10 +67,11 @@ function resolveRouting(
       channel_type: dest.channelType!,
       platform_id: dest.platformId!,
       thread_id: threadId,
+      instance: dest.instance ?? null,
       resolvedName: to,
     };
   }
-  return { channel_type: 'agent', platform_id: dest.agentGroupId!, thread_id: null, resolvedName: to };
+  return { channel_type: 'agent', platform_id: dest.agentGroupId!, thread_id: null, instance: null, resolvedName: to };
 }
 
 export const sendMessage: McpToolDefinition = {
@@ -100,6 +107,7 @@ export const sendMessage: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
+      instance: routing.instance,
       content: JSON.stringify({ text }),
     });
 
@@ -149,6 +157,7 @@ export const sendFile: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
+      instance: routing.instance,
       content: JSON.stringify({ text: (args.text as string) || '', files: [filename] }),
     });
 
@@ -190,6 +199,7 @@ export const editMessage: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
+      instance: routing.instance,
       content: JSON.stringify({ operation: 'edit', messageId: platformId, text }),
     });
 
@@ -231,6 +241,7 @@ export const addReaction: McpToolDefinition = {
       platform_id: routing.platform_id,
       channel_type: routing.channel_type,
       thread_id: routing.thread_id,
+      instance: routing.instance,
       content: JSON.stringify({ operation: 'reaction', messageId: platformId, emoji }),
     });
 
